@@ -94,7 +94,7 @@ JavaScript con CommonJS en api y e2e; ESM (por Vite) en web. Sin TypeScript (D-0
 docker-compose.yml
 .gitignore                 # node_modules, dist, e2e/results, e2e/test-results
 api/
-  Dockerfile
+  Dockerfile  .dockerignore
   package.json  package-lock.json
   migrations/001_init.sql
   src/
@@ -112,14 +112,27 @@ api/
     auth.test.js  rooms.test.js  bookings.test.js  concurrency.test.js  room-lock.test.js
 web/
   Dockerfile               # multi-stage: node build → nginx
+  .dockerignore
   nginx.conf
   package.json  package-lock.json  vite.config.js  index.html
   src/ main.jsx  App.jsx  api.js  auth.jsx  pages/*.jsx  components/*.jsx  styles.css
 e2e/
   Dockerfile               # FROM imagen playwright; npm ci; copia tests
+  .dockerignore
   package.json  package-lock.json  playwright.config.js
   tests/ smoke.spec.js  empleado.spec.js  admin.spec.js
   results/                 # capturas (montado como volumen, ignorado por git)
+```
+
+**`.dockerignore`** (D-31) en `api/`, `web/` y `e2e/`, para que la imagen se construya solo con lo versionado en el repo:
+```
+node_modules
+dist
+results
+test-results
+.env*
+*.log
+.DS_Store
 ```
 
 ### 5.3 docker-compose.yml (contrato)

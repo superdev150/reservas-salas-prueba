@@ -16,6 +16,7 @@ Hay dos modos. **Por defecto estás en modo Desarrollo.** Solo pasas a modo Reco
 
 Trabajo normal con el responsable, una tarea por sesión.
 
+0. **Al iniciar la sesión, guarda el export de la anterior:** si hay un archivo exportado de una sesión anterior (`/export`, p. ej. `S1-*.txt`) fuera de `docs/sesiones/` o sin commitear, muévelo a `docs/sesiones/` y haz un commit local solo con ese export (`SX: export de la sesión ...`) antes de empezar la tarea.
 1. **Plan corto antes de escribir código:** al empezar una tarea, presenta un plan breve (archivos que vas a crear o cambiar, pasos, cómo lo vas a verificar y dudas abiertas) y **espera el OK del responsable**. No escribas código antes de ese OK.
 2. **Si el spec no resuelve algo, pregunta.** No lo decidas tú. Con la respuesta, **primero** escribe la decisión en `docs/00-decisiones.md` → "Decisiones durante la ejecución" (fecha, tarea, duda, decisión, porqué) y **después** escribe el código.
 3. Al cerrar cada tarea, haz el registro obligatorio (ver abajo).
