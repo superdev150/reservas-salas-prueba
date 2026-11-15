@@ -1,0 +1,1201 @@
+
+❯ <ide_opened_file>The user opened the file
+  /Users/superdev/Documents/reservas-salas/S2-t2-bd-auth.txt in the IDE. This
+  may or may not be related to the current task.</ide_opened_file>
+
+❯ Empecemos la T3, dame el plan corto y espera mi OK. tmabien tengo una
+  consulta como te vas a asegurar que en la prueba de concurrencia el choque lo
+  detecta la base de datos y no otra cosa?
+
+⏺ Primero guardo el export de la sesión anterior (paso 0) y leo la
+  documentación.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Bash(mv S2-t2-bd-auth.txt docs/sesiones/ && git add
+      docs/sesiones/S2-t2-bd-auth.txt && git commit -q -m "S2: export de la
+      sesión de T2 (BD y autenticación)…)
+  ⎿  2 files changed (binary, mode only or too large to show)
+  ⎿  (files that changed while this command ran, by the command or by
+     another process; a convenience view, not a review or audit of the
+     command)
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ Export de S2 guardado en docs/sesiones/ (commit 5b11ea8). Ya leí el spec (§4,
+  §6.1, §7, §8, §10), el backlog de T3 y las decisiones D-28 a D-35. Este es el
+  plan.
+
+  Plan T3 · API de reservas con garantía anti-choque
+
+  Archivos
+  - api/src/time.js: añado la validación de R2–R6, en este orden: R2 → R3 → R4 →
+    R5 → R6. También añado la conversión de UTC a hora local para devolver
+    date/startTime/endTime.
+  - api/src/errors.js: convierto 23P01 + bookings_no_overlap en 409
+    BOOKING_CONFLICT. Cualquier otro error de PostgreSQL sigue saliendo
+    como 500.
+  - api/src/routes/rooms.js: solo GET /api/rooms. Para un admin,
+    includeInactive=true también muestra las salas inactivas.
+  - api/src/routes/bookings.js: GET ?date, GET /mine, POST y DELETE /:id. El
+    POST es una transacción con un cliente del pool: BEGIN → leo la sala con un
+    SELECT sin bloqueo (404 o 422) → INSERT → COMMIT. El FOR SHARE llega en T5.
+  - api/src/app.js: monto las dos rutas nuevas.
+  - api/test/bookings.test.js: un caso por regla R1–R10 y por código de error.
+  - api/test/concurrency.test.js: los dos casos del §8.
+  - api/test/rooms.test.js: GET /api/rooms.
+  - Docs:
+    - D-36 y siguientes en 00-decisiones.md.
+    - Mensajes de error pendientes en el spec §7, como dice D-35.
+    - docs/tareas/T3-reservas.md, entrada en la bitácora y commit T3: ....
+
+  Verificación
+  - docker compose down -v && docker compose up -d --build y docker compose ps
+    en estado healthy.
+  - docker compose exec api npm test tres veces seguidas.
+  - curl como Luis contra la reserva demo: Sala 1, lunes 2026-11-16, 10:00–11:00
+    → 409. Después 11:00–12:00 → 201.
+  - grep en bookings.js para comprobar que no se consulta bookings antes del
+    INSERT.
+
+  Tu pregunta: ¿cómo sé que el choque lo detecta la base de datos?
+
+  1. El código no tiene otra forma de detectarlo. El POST nunca lee bookings
+     antes del INSERT, y en T3 tampoco bloquea la sala. El único sitio donde se
+     genera un 409 BOOKING_CONFLICT es la traducción del error 23P01 con
+     constraint = 'bookings_no_overlap'. Si el 409 viniera de otro sitio,
+     saldría como 500 y el test fallaría. El test comprueba código y mensaje
+     exactos en las 19 respuestas.
+  2. El resultado se mira en la base de datos, no solo en las respuestas HTTP.
+     Un SELECT count(*) debe dar 1 reserva activa en ese horario. En el caso
+     escalonado, un self-join con tstzrange && tstzrange debe dar 0 pares
+     solapados.
+  3. Las peticiones van en paralelo de verdad. Las 20 salen a la vez con
+     Promise.all contra un único servidor HTTP, y el pool tiene 10 conexiones.
+     Así varias transacciones están abiertas al mismo tiempo.
+  4. Propuesta: un test de control negativo (opcional, no está en el spec). En
+     reservas_test borro la restricción con ALTER TABLE ... DROP CONSTRAINT y
+     lanzo las mismas 20 peticiones. Deberían entrar más de una. Eso demuestra
+     que no hay otra protección y que la restricción es lo único que frena el
+     choque. Ojo: demuestra que no hay otro "guardia", pero no que las
+     peticiones fueran simultáneas; eso lo cubre el punto 3.
+
+  Dudas abiertas (necesito tu respuesta para escribirlas en decisiones antes del
+  código)
+
+  1. Mensajes que faltan. Propongo estos:
+     - INVALID_SLOT: "El horario debe ir en tramos de 15 minutos y durar entre
+       15 minutos y 4 horas."
+     - OUTSIDE_BUSINESS_HOURS: "Solo se puede reservar de lunes a viernes entre
+       08:00 y 20:00."
+     - IN_PAST: "No se puede reservar en el pasado."
+     - TOO_FAR_AHEAD: "Solo se puede reservar hasta 30 días por adelantado."
+     - ROOM_INACTIVE: "La sala no está disponible."
+     - BOOKING_NOT_CANCELLABLE: "Esta reserva ya no se puede cancelar."
+     - VALIDATION_ERROR en reservas: "Datos de la reserva no válidos."
+     - ROOM_NAME_TAKEN lo dejo para T5.
+  2. R6. Propongo que la fecha local de inicio pueda ser como mucho hoy + 30
+     días (inclusive).
+  3. Validación de formato (400).
+     - roomId debe ser un entero positivo.
+     - date debe ser una fecha real en formato YYYY-MM-DD.
+     - Las horas deben ir en formato HH:mm.
+     - title es un texto de 1 a 120 caracteres tras recortar, y se guarda
+       recortado.
+     - Si fin ≤ inicio, propongo devolver INVALID_SLOT (por R3).
+  4. Orden en DELETE. Propongo 404 → 403 → 409: un empleado que intenta cancelar
+     una reserva ajena ya cancelada recibe 403. Un :id que no es numérico
+     devuelve 404.
+  5. Tests de R7 y R10. Para probar ROOM_INACTIVE y "la reserva ya empezó" sin
+     adelantar T5, preparo los datos directamente por SQL en reservas_test. Por
+     ejemplo, desactivo la sala con un UPDATE o inserto una reserva pasada.
+  6. ¿Incluyo el test de control negativo del punto 4?
+
+  Espero tu OK, o tus cambios a estas dudas, antes de escribir nada.
+
+❯ OK al plan, con respoecto a la explicacion de los puntos 1 a 4 me convence
+  porque no hay otra comprobacion antes del INSERT asi que el unico 409 posible
+  sale de la restriccion y ademas se confirma contando en la base no solo en
+  las respuestas. Las dudas 1 a 5 como propones porque los mensajes son claros
+  y dicen que regla fallo y validar el formato antes de las reglas da errores
+  mas claros. la 6 si: incluye el control negativo en su propio archivo para
+  que quitar la restriccion no afecte a las otras pruebas anotalo como decision
+
+⏺ Empiezo por las decisiones (D-36 a D-41) y los mensajes en el spec; después
+  escribo el código.
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Bash(date '+%Y-%m-%d %H:%M' && cat >> docs/00-decisiones.md <<'EOF'
+      | D-36 | 2026-11-15 | T3 | Mensajes de error de reservas pendientes desde
+      D-35 | `INVALID_SLOT` "…)
+  ⎿  Updated docs/00-decisiones.md (+6 -0)
+      46  | D-33 | 2026-11-15 | T1 | El backlog fijaba `npm test` = `node
+           --test test/`, pero en Node 22 falla (toma `test/` como archiv
+          o: "Cannot find module '/app/test'") | `npm test` = `node --tes
+          t "test/**/*.test.js"`. Backlog T1 corregido | El glob explícit
+          o ejecuta solo los `*.test.js`, así que `test/helpers.js` (T2) 
+          nunca corre como test; `node --test` sin argumentos sí lo tomar
+          ía por el patrón por defecto `test/**/*.js` |
+      47  | D-34 | 2026-11-15 | T2 | `node --test` ejecuta cada archivo d
+          e test en un proceso propio y en paralelo; con `helpers.js` bor
+          rando y recreando `reservas_test`, dos archivos chocarían | `np
+          m test` = `node --test --test-concurrency=1 "test/**/*.test.js"
+          `: los archivos corren en serie. Backlog T1 actualizado | Cada 
+          archivo parte de una `reservas_test` limpia y predecible. La co
+          ncurrencia del §8 se prueba dentro de un mismo archivo con `Pro
+          mise.all`, así que correr archivos en serie no la debilita |
+      48  | D-35 | 2026-11-15 | T2 | El spec fijaba los códigos de error 
+          pero no el texto de `message` | Mensajes fijos por código en el
+           spec §7 (columna "Mensaje"): `INVALID_CREDENTIALS` "Correo o c
+          ontraseña incorrectos.", `UNAUTHORIZED` "Sesión no válida o exp
+          irada.", `FORBIDDEN` "No tienes permiso para esta acción.", `VA
+          LIDATION_ERROR` en login "Correo y contraseña son obligatorios.
+          " y con JSON mal formado "El cuerpo de la petición no es JSON v
+          álido.", `NOT_FOUND` "Recurso no encontrado.", `INTERNAL_ERROR`
+           "Error interno del servidor." Los mensajes de T3/T5 se fijan e
+          n el spec al hacer esas tareas | Contrato exacto también en el 
+          texto: una reconstrucción produce los mismos mensajes, y la UI 
+          muestra `error.message` tal cual |
+      49 +| D-36 | 2026-11-15 | T3 | Mensajes de error de reservas pendie
+         +ntes desde D-35 | `INVALID_SLOT` "El horario debe ir en tramos 
+         +de 15 minutos y durar entre 15 minutos y 4 horas." · `OUTSIDE_B
+         +USINESS_HOURS` "Solo se puede reservar de lunes a viernes entre
+         + 08:00 y 20:00." · `IN_PAST` "No se puede reservar en el pasado
+         +." · `TOO_FAR_AHEAD` "Solo se puede reservar hasta 30 días por 
+         +adelantado." · `ROOM_INACTIVE` "La sala no está disponible." · 
+         +`BOOKING_NOT_CANCELLABLE` "Esta reserva ya no se puede cancelar
+         +." · `VALIDATION_ERROR` en reservas "Datos de la reserva no vál
+         +idos." `ROOM_NAME_TAKEN` queda para T5. Fijados en el spec §7 |
+         + Cada mensaje dice qué regla falló y la UI los muestra tal cual
+         + |                                                             
+      50 +| D-37 | 2026-11-15 | T3 | R6 "no más de 30 días naturales desd
+         +e hoy": ¿incluido el día 30? | La fecha local de inicio puede s
+         +er como máximo hoy + 30 días (inclusive) | Lectura literal y si
+         +mple; se calcula sobre la fecha local, sin depender de la hora 
+         +|                                                              
+      51 +| D-38 | 2026-11-15 | T3 | ¿Qué es "formato inválido" (400) al 
+         +crear reserva y en `GET ?date`? | 400 `VALIDATION_ERROR` si: `r
+         +oomId` no es entero positivo; `date` no es una fecha real `YYYY
+         +-MM-DD`; `startTime`/`endTime` no son `HH:mm` (00–23 : 00–59); 
+         +`title` no es texto o tras recortar no tiene 1–120 caracteres. 
+         +El título se guarda recortado. Fin ≤ inicio → 422 `INVALID_SLOT
+         +` (R3). Orden: R2 → R3 → R4 → R5 → R6 | Validar el formato ante
+         +s que las reglas da errores más claros; fin ≤ inicio es una dur
+         +ación inválida, no un formato inválido |                       
+      52 +| D-39 | 2026-11-15 | T3 | Orden de errores en `DELETE /api/boo
+         +kings/:id` | 404 (no existe o `:id` no numérico) → 403 (no es d
+         +ueño ni admin) → 409 `BOOKING_NOT_CANCELLABLE` (no activa o ya 
+         +empezó) | No se revela el estado de reservas ajenas a quien no 
+         +puede cancelarlas |                                            
+      53 +| D-40 | 2026-11-15 | T3 | ¿Cómo se prueban R7 (sala inactiva) 
+         +y R10 (ya empezó) sin la API de T5 ni esperar al reloj? | El te
+         +st prepara los datos por SQL directo en `reservas_test` (`UPDAT
+         +E rooms SET is_active = false`, `INSERT` de una reserva con ini
+         +cio pasado) | No adelanta el CRUD de salas de T5 y no depende d
+         +e la hora en que se ejecuta el test |                          
+      54 +| D-41 | 2026-11-15 | T3 | ¿Cómo se demuestra que el 409 lo pro
+         +duce la restricción y no otra comprobación? | Test de control n
+         +egativo en su propio archivo `api/test/concurrency-control.test
+         +.js`: en `reservas_test` borra `bookings_no_overlap` y lanza la
+         +s mismas 20 peticiones idénticas → entran más de una (todas 201
+         +). Archivo propio porque `helpers.js` recrea la BD por archivo,
+         + así que quitar la restricción no afecta a las demás pruebas. A
+         +ñadido al spec §5.2 y §8 | Si sin la restricción no hay choques
+         + detectados, no existe otra protección en el código: la única f
+         +uente del 409 es la BD |                                       
+
+⏺ Ahora el spec (§5.2, §7, §8):
+
+⏺ Bash(python3 - <<'EOF'
+      p='docs/01-spec.md'; s=open(p).read()…)
+  ⎿  Updated docs/01-spec.md (+10 -9)
+      109      routes/health.js  routes/auth.js  routes/rooms.js  routes/
+           bookings.js
+      110    test/
+      111      helpers.js             # crea BD reservas_test limpia, mig
+           ra, siembra, devuelve app
+      112 -    auth.test.js  rooms.test.js  bookings.test.js  concurrency
+          -.test.js  room-lock.test.js                                   
+      112 +    auth.test.js  rooms.test.js  bookings.test.js  concurrency
+          +.test.js  concurrency-control.test.js  room-lock.test.js      
+      113  web/
+      114    Dockerfile               # multi-stage: node build → nginx
+      115    .dockerignore
+     ...
+      240  
+      241  | Código | HTTP | Cuándo | Mensaje (`message`, D-35) |
+      242  |---|---|---|---|
+      243 -| `VALIDATION_ERROR` | 400 | Cuerpo/parámetros con formato inv
+          -álido o faltantes | Login sin correo/contraseña válidos: "Corr
+          -eo y contraseña son obligatorios." · JSON mal formado: "El cue
+          -rpo de la petición no es JSON válido." · Resto: se fija en T3/
+          -T5 |                                                          
+      243 +| `VALIDATION_ERROR` | 400 | Cuerpo/parámetros con formato inv
+          +álido o faltantes | Login sin correo/contraseña válidos: "Corr
+          +eo y contraseña son obligatorios." · JSON mal formado: "El cue
+          +rpo de la petición no es JSON válido." · Reservas (`POST` y `G
+          +ET ?date`, D-38): "Datos de la reserva no válidos." · Salas: s
+          +e fija en T5 |                                                
+      244  | `UNAUTHORIZED` | 401 | Sin token, token inválido o expirado 
+           | "Sesión no válida o expirada." |
+      245  | `INVALID_CREDENTIALS` | 401 | Login con correo o contraseña 
+           incorrectos (mismo mensaje en ambos casos) | "Correo o contras
+           eña incorrectos." |
+      246  | `FORBIDDEN` | 403 | Rol insuficiente o reserva ajena | "No t
+           ienes permiso para esta acción." |
+      247  | `NOT_FOUND` | 404 | Recurso inexistente | "Recurso no encont
+           rado." |
+      248  | `BOOKING_CONFLICT` | 409 | R1 | "La sala ya está reservada e
+           n ese horario." |
+      249 -| `ROOM_NAME_TAKEN` | 409 | R13 | Se fija en T3/T5 |          
+      250 -| `BOOKING_NOT_CANCELLABLE` | 409 | R10 | Se fija en T3/T5 |  
+      251 -| `INVALID_SLOT` | 422 | R2, R3 | Se fija en T3/T5 |          
+      252 -| `OUTSIDE_BUSINESS_HOURS` | 422 | R4 | Se fija en T3/T5 |    
+      253 -| `IN_PAST` | 422 | R5 | Se fija en T3/T5 |                   
+      254 -| `TOO_FAR_AHEAD` | 422 | R6 | Se fija en T3/T5 |             
+      255 -| `ROOM_INACTIVE` | 422 | R7 | Se fija en T3/T5 |             
+      249 +| `ROOM_NAME_TAKEN` | 409 | R13 | Se fija en T5 |             
+      250 +| `BOOKING_NOT_CANCELLABLE` | 409 | R10 | "Esta reserva ya no 
+          +se puede cancelar." |                                         
+      251 +| `INVALID_SLOT` | 422 | R2, R3 | "El horario debe ir en tramo
+          +s de 15 minutos y durar entre 15 minutos y 4 horas." |        
+      252 +| `OUTSIDE_BUSINESS_HOURS` | 422 | R4 | "Solo se puede reserva
+          +r de lunes a viernes entre 08:00 y 20:00." |                  
+      253 +| `IN_PAST` | 422 | R5 | "No se puede reservar en el pasado." 
+          +|                                                             
+      254 +| `TOO_FAR_AHEAD` | 422 | R6 | "Solo se puede reservar hasta 3
+          +0 días por adelantado." (hasta hoy + 30 días inclusive, D-37) 
+          +|                                                             
+      255 +| `ROOM_INACTIVE` | 422 | R7 | "La sala no está disponible." |
+      256  | `INTERNAL_ERROR` | 500 | Cualquier otro (sin filtrar detalle
+           s internos) | "Error interno del servidor." |
+      257  
+      258  ### 7.1 Representaciones
+     ...
+      301  
+      302  - La garantía es R1 en BD. El INSERT es una sola sentencia; Po
+           stgreSQL serializa el chequeo de la restricción, así que de N 
+           inserciones simultáneas que se solapan, **exactamente una** ti
+           ene éxito.
+      303  - **Test obligatorio** (`api/test/concurrency.test.js`): lanza
+           r con `Promise.all` **20** `POST /api/bookings` idénticos (mis
+           mo usuario, sala y horario) contra la BD real → exactamente 1 
+           respuesta 201, 19 respuestas 409 `BOOKING_CONFLICT`, y `SELECT
+            count(*)` de reservas activas de ese horario = 1. Segundo cas
+           o: 20 peticiones de **distintos horarios solapados parcialment
+           e** (p. ej. inicios escalonados de 15 min con 60 min de duraci
+           ón) → en BD no existe ningún par solapado (verificado con un s
+           elf-join).
+      304 +- **Control negativo** (`api/test/concurrency-control.test.js`
+          +, D-41, en archivo propio): borra `bookings_no_overlap` en `re
+          +servas_test` y repite las 20 peticiones idénticas → todas 201.
+          + Demuestra que no hay otra comprobación en el código: el único
+          + origen del 409 es la restricción.                            
+      305  - El pool de `pg` debe tener al menos 10 conexiones para que l
+           a concurrencia sea real.
+     … 2 more lines (ctrl+o to expand)
+
+⏺ Decisiones y spec listos. Ahora el código: primero time.js y errors.js.
+
+⏺ Bash(python3 - <<'EOF'
+      p='api/src/time.js'; s=open(p).read()…)
+  ⎿  Updated api/src/errors.js (+6 -0)
+      16    if (err instanceof AppError) {
+      17      return res.status(err.status).json({ error: { code: err.cod
+          e, message: err.message } });
+      18    }
+      19 +  // R1: el choque lo detecta PostgreSQL (restricción EXCLUDE, 
+         +spec §6.1). Es el único origen del 409.                        
+      20 +  if (err.code === '23P01' && err.constraint === 'bookings_no_o
+         +verlap') {                                                     
+      21 +    return res.status(409).json({                              
+      22 +      error: { code: 'BOOKING_CONFLICT', message: 'La sala ya e
+         +stá reservada en ese horario.' },                              
+      23 +    });                                                        
+      24 +  }                                                            
+      25    if (err.type === 'entity.parse.failed') {
+      26      return res.status(400).json({
+      27        error: { code: 'VALIDATION_ERROR', message: 'El cuerpo de
+           la petición no es JSON válido.' },
+  ⎿  Updated api/src/time.js (+84 -4)
+      1 -// Conversión hora local de la oficina ↔ UTC (spec §4, D-09).   
+      2 -// T2 solo necesita "hoy", "próximo día hábil" y "hora local → U
+        -TC" para el seed;                                               
+      3 -// las validaciones R2–R6 se añaden en T3.                      
+      1 +// Conversión hora local de la oficina ↔ UTC y reglas de calenda
+        +rio R2–R6 (spec §4, D-09).                                      
+      2 +// Toda la lógica de zona horaria vive en este módulo.          
+      3 +const { AppError } = require('./errors');                       
+      4  
+      5  const TIMEZONE = process.env.APP_TIMEZONE || 'America/Tegucigalp
+         a';
+      6  
+     ...
+       61    return next;
+       62  }
+       63  
+       64 -module.exports = { TIMEZONE, localToUtc, todayLocal, addDays, 
+          -weekday, nextBusinessDay };                                   
+       64 +// Date (UTC) → { date: 'YYYY-MM-DD', time: 'HH:mm' } en hora 
+          +local.                                                        
+       65 +function utcToLocal(instant) {                                
+       66 +  const p = localParts(instant);                              
+       67 +  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.h
+          +our}:${p.minute}` };                                          
+       68 +}                                                             
+       69 +                                                              
+       70 +// Formato (400, D-38): fecha real 'YYYY-MM-DD'.              
+       71 +function isValidDate(value) {                                 
+       72 +  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test
+          +(value)) return false;                                        
+       73 +  const [y, m, d] = value.split('-').map(Number);             
+       74 +  const dt = new Date(Date.UTC(y, m - 1, d));                 
+       75 +  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m -
+          + 1 && dt.getUTCDate() === d;                                  
+       76 +}                                                             
+       77 +                                                              
+       78 +// Formato (400, D-38): 'HH:mm' con 00–23 y 00–59.            
+       79 +function isValidTime(value) {                                 
+       80 +  return typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\
+          +d$/.test(value);                                              
+       81 +}                                                             
+       82 +                                                              
+       83 +function toMinutes(time) {                                    
+       84 +  const [hh, mm] = time.split(':').map(Number);               
+       85 +  return hh * 60 + mm;                                        
+       86 +}                                                             
+       87 +                                                              
+       88 +const SLOT_MINUTES = 15;                                      
+       89 +const MIN_DURATION = 15;                                      
+       90 +const MAX_DURATION = 240;                                     
+     … 54 more lines (ctrl+o to expand)
+
+⏺ Ahora las rutas y app.js:
+
+⏺ Bash(cat > api/src/routes/rooms.js <<'EOF'
+      const express = require('express');…)
+  ⎿  Updated api/src/app.js (+4 -0)
+      1  const express = require('express');
+      2  const healthRouter = require('./routes/health');
+      3  const authRouter = require('./routes/auth');
+      4 +const roomsRouter = require('./routes/rooms');                  
+      5 +const bookingsRouter = require('./routes/bookings');            
+      6  const { notFoundHandler, errorHandler } = require('./errors');
+      7  
+      8  function createApp() {
+     ...
+      11  
+      12    app.use('/api/health', healthRouter);
+      13    app.use('/api/auth', authRouter);
+      14 +  app.use('/api/rooms', roomsRouter);                          
+      15 +  app.use('/api/bookings', bookingsRouter);                    
+      16  
+      17    app.use('/api', notFoundHandler);
+      18    app.use(errorHandler);
+  ⎿  Created api/src/routes/bookings.js (+160 -0)
+        1 +const express = require('express');                           
+        2 +const { pool } = require('../db');                            
+        3 +const { requireAuth } = require('../auth');                   
+        4 +const { AppError } = require('../errors');                    
+        5 +const {                                                       
+        6 +  localToUtc,                                                 
+        7 +  utcToLocal,                                                 
+        8 +  addDays,                                                    
+        9 +  isValidDate,                                                
+       10 +  isValidTime,                                                
+       11 +  validateSlot,                                               
+       12 +} = require('../time');                                       
+       13 +                                                              
+       14 +const router = express.Router();                              
+       15 +router.use(requireAuth);                                      
+       16 +                                                              
+       17 +const MAX_INT = 2147483647;                                   
+       18 +const MSG_VALIDATION = 'Datos de la reserva no válidos.';     
+       19 +const MSG_NOT_FOUND = 'Recurso no encontrado.';               
+       20 +                                                              
+       21 +function validationError() {                                  
+       22 +  return new AppError(400, 'VALIDATION_ERROR', MSG_VALIDATION)
+          +;                                                             
+       23 +}                                                             
+       24 +                                                              
+       25 +function notFound() {                                         
+       26 +  return new AppError(404, 'NOT_FOUND', MSG_NOT_FOUND);       
+       27 +}                                                             
+       28 +                                                              
+       29 +function isPositiveInt(value) {                               
+       30 +  return Number.isInteger(value) && value > 0 && value <= MAX_
+          +INT;                                                          
+       31 +}                                                             
+       32 +                                                              
+       33 +// Columnas para construir la representación Booking (spec §7.
+          +1).                                                           
+       34 +const BOOKING_COLUMNS = `b.id, b.room_id, r.name AS room_name,
+          + b.user_id, u.name AS user_name,                              
+       35 +  b.title, b.starts_at, b.ends_at, b.status`;                 
+       36 +const BOOKING_JOINS = 'JOIN rooms r ON r.id = b.room_id JOIN u
+          +sers u ON u.id = b.user_id';                                  
+       37 +                                                              
+       38 +function toBooking(row) {                                     
+       39 +  const start = utcToLocal(row.starts_at);                    
+       40 +  const end = utcToLocal(row.ends_at);                        
+     … 120 more lines (ctrl+o to expand)
+  ⎿  Created api/src/routes/rooms.js (+31 -0)
+       1 +const express = require('express');                            
+       2 +const { pool } = require('../db');                             
+       3 +const { requireAuth } = require('../auth');                    
+       4 +                                                               
+       5 +// T3: solo GET /api/rooms. El CRUD de administración es T5.   
+       6 +const router = express.Router();                               
+       7 +                                                               
+       8 +// Representación Room del spec §7.1.                          
+       9 +function toRoom(row) {                                         
+      10 +  return {                                                     
+      11 +    id: row.id,                                                
+      12 +    name: row.name,                                            
+      13 +    capacity: row.capacity,                                    
+      14 +    location: row.location,                                    
+      15 +    isActive: row.is_active,                                   
+      16 +  };                                                           
+      17 +}                                                              
+      18 +                                                               
+      19 +router.get('/', requireAuth, async (req, res) => {             
+      20 +  // includeInactive=true solo vale para admin; para employee s
+         +e ignora.                                                      
+      21 +  const includeInactive = req.user.role === 'admin' && req.quer
+         +y.includeInactive === 'true';                                  
+      22 +  const { rows } = await pool.query(                           
+      23 +    `SELECT id, name, capacity, location, is_active FROM rooms 
+      24 +      ${includeInactive ? '' : 'WHERE is_active'}              
+      25 +      ORDER BY name`,                                          
+      26 +  );                                                           
+      27 +  res.json(rows.map(toRoom));                                  
+      28 +});                                                            
+      29 +                                                               
+      30 +module.exports = router;                                       
+      31 +module.exports.toRoom = toRoom;                                
+
+⏺ Ahora los tests. Añado a helpers.js utilidades compartidas (login y fechas
+  relativas):
+
+⏺ Bash(python3 - <<'EOF'
+      p='api/test/helpers.js'; s=open(p).read()…)
+  ⎿  Updated api/test/helpers.js (+30 -1)
+      32    return { app: createApp(), pool };
+      33  }
+      34  
+      35 -module.exports = { setupTestDb };                              
+      35 +const PASSWORDS = { 'rrhh@empresa.local': 'Rrhh2026!' };       
+      36 +                                                               
+      37 +// Devuelve el token de un usuario del seed.                   
+      38 +async function loginAs(app, email) {                           
+      39 +  const request = require('supertest');                        
+      40 +  const res = await request(app)                               
+      41 +    .post('/api/auth/login')                                   
+      42 +    .send({ email, password: PASSWORDS[email] || 'Empleado2026!
+         +' });                                                          
+      43 +  if (res.status !== 200) throw new Error(`login ${email} → ${r
+         +es.status}`);                                                  
+      44 +  return res.body.token;                                       
+      45 +}                                                              
+      46 +                                                               
+      47 +// Fechas relativas a hoy en hora local (spec §10: nunca fijas)
+         +.                                                              
+      48 +function dates() {                                             
+      49 +  const { todayLocal, addDays, weekday, nextBusinessDay } = req
+         +uire('../src/time');                                           
+      50 +  const today = todayLocal();                                  
+      51 +  const isWeekend = (d) => weekday(d) === 0 || weekday(d) === 6
+         +;                                                              
+      52 +  let prevBusiness = addDays(today, -1);                       
+      53 +  while (isWeekend(prevBusiness)) prevBusiness = addDays(prevBu
+         +siness, -1);                                                   
+      54 +  let nextSaturday = addDays(today, 1);                        
+      55 +  while (weekday(nextSaturday) !== 6) nextSaturday = addDays(ne
+         +xtSaturday, 1);                                                
+      56 +  let tooFar = addDays(today, 31);                             
+      57 +  while (isWeekend(tooFar)) tooFar = addDays(tooFar, 1);       
+      58 +  // Último día hábil permitido por R6 (≤ hoy + 30).           
+      59 +  let lastAllowed = addDays(today, 30);                        
+      60 +  while (isWeekend(lastAllowed)) lastAllowed = addDays(lastAllo
+         +wed, -1);                                                      
+      61 +  return { today, next: nextBusinessDay(today), prevBusiness, n
+         +extSaturday, tooFar, lastAllowed };                            
+      62 +}                                                              
+      63 +                                                               
+      64 +module.exports = { setupTestDb, loginAs, dates };              
+
+⏺ Write(api/test/bookings.test.js)
+  ⎿  Wrote 314 lines to api/test/bookings.test.js
+       1 // Spec §4 (R1–R11) y §7: un caso por regla y por código de erro
+         r.
+       2 // Seed: usuarios 1 rrhh (admin), 2 Ana, 3 Luis, 4 María; salas
+         1–5; demo Sala 1 10:00–11:00 de Ana.
+       3 const { test, before, after } = require('node:test');
+       4 const assert = require('node:assert');
+       5 const request = require('supertest');
+       6 const { setupTestDb, loginAs, dates } = require('./helpers');
+       7 const { localToUtc } = require('../src/time');
+       8
+     … +306 lines (ctrl+o to expand)
+
+⏺ Write(api/test/rooms.test.js)
+  ⎿  Wrote 60 lines to api/test/rooms.test.js
+       1 // Spec §7.2: GET /api/rooms (el CRUD de administración es T5).
+       2 const { test, before, after } = require('node:test');
+       3 const assert = require('node:assert');
+       4 const request = require('supertest');
+       5 const { setupTestDb, loginAs } = require('./helpers');
+       6
+       7 let app;
+       8 let pool;
+       9 let admin;
+      10 let luis;
+     … +50 lines (ctrl+o to expand)
+
+⏺ Ahora los dos archivos de concurrencia:
+
+⏺ Bash(cat > api/test/concurrency.test.js <<'EOF'
+      // Spec §8: la garantía anti-choque vive en PostgreSQL (restricción
+      bookings_no_overlap).…)
+  ⎿  Created api/test/concurrency-control.test.js (+53 -0)
+       1 +// Control negativo (D-41): sin la restricción bookings_no_over
+         +lap, las mismas 20 peticiones                                  
+       2 +// idénticas entran todas. Demuestra que el código no tiene nin
+         +guna otra comprobación de                                      
+       3 +// solapamiento: el único origen del 409 BOOKING_CONFLICT es Po
+         +stgreSQL.                                                      
+       4 +// Va en su propio archivo: helpers.js recrea reservas_test por
+         + archivo, así que quitar la                                    
+       5 +// restricción aquí no afecta al resto de pruebas.             
+       6 +const { test, before, after } = require('node:test');          
+       7 +const assert = require('node:assert');                         
+       8 +const request = require('supertest');                          
+       9 +const { setupTestDb, loginAs, dates } = require('./helpers');  
+      10 +                                                               
+      11 +const N = 20;                                                  
+      12 +let server;                                                    
+      13 +let pool;                                                      
+      14 +let token;                                                     
+      15 +let day;                                                       
+      16 +                                                               
+      17 +before(async () => {                                           
+      18 +  let app;                                                     
+      19 +  ({ app, pool } = await setupTestDb());                       
+      20 +  server = app.listen(0);                                      
+      21 +  token = await loginAs(app, 'luis@empresa.local');            
+      22 +  day = dates().next;                                          
+      23 +  await pool.query('ALTER TABLE bookings DROP CONSTRAINT bookin
+         +gs_no_overlap');                                               
+      24 +});                                                            
+      25 +after(async () => {                                            
+      26 +  await new Promise((resolve) => server.close(resolve));       
+      27 +  await pool.end();                                            
+      28 +});                                                            
+      29 +                                                               
+      30 +test(`sin la restricción, ${N} reservas idénticas simultáneas →
+         + las ${N} entran (201)`, async () => {                         
+      31 +  const { rows: constraint } = await pool.query(               
+      32 +    "SELECT 1 FROM pg_constraint WHERE conname = 'bookings_no_o
+         +verlap'",                                                      
+      33 +  );                                                           
+      34 +  assert.strictEqual(constraint.length, 0);                    
+      35 +                                                               
+      36 +  const responses = await Promise.all(                         
+      37 +    Array.from({ length: N }, () =>                            
+      38 +      request(server)                                          
+      39 +        .post('/api/bookings')                                 
+      40 +        .set('Authorization', `Bearer ${token}`)               
+     … 13 more lines (ctrl+o to expand)
+  ⎿  Created api/test/concurrency.test.js (+97 -0)
+       1 +// Spec §8: la garantía anti-choque vive en PostgreSQL (restric
+         +ción bookings_no_overlap).                                     
+       2 +// Las peticiones van todas a la vez (Promise.all) contra un ún
+         +ico servidor HTTP y la BD real;                                
+       3 +// el pool tiene 10 conexiones, así que varias transacciones es
+         +tán abiertas a la vez.                                         
+       4 +const { test, before, after } = require('node:test');          
+       5 +const assert = require('node:assert');                         
+       6 +const request = require('supertest');                          
+       7 +const { setupTestDb, loginAs, dates } = require('./helpers');  
+       8 +const { localToUtc } = require('../src/time');                 
+       9 +                                                               
+      10 +const N = 20;                                                  
+      11 +let server;                                                    
+      12 +let pool;                                                      
+      13 +let token;                                                     
+      14 +let day;                                                       
+      15 +                                                               
+      16 +before(async () => {                                           
+      17 +  let app;                                                     
+      18 +  ({ app, pool } = await setupTestDb());                       
+      19 +  server = app.listen(0);                                      
+      20 +  token = await loginAs(app, 'luis@empresa.local');            
+      21 +  day = dates().next;                                          
+      22 +});                                                            
+      23 +after(async () => {                                            
+      24 +  await new Promise((resolve) => server.close(resolve));       
+      25 +  await pool.end();                                            
+      26 +});                                                            
+      27 +                                                               
+      28 +function book(roomId, startTime, endTime) {                    
+      29 +  return request(server)                                       
+      30 +    .post('/api/bookings')                                     
+      31 +    .set('Authorization', `Bearer ${token}`)                   
+      32 +    .send({ roomId, date: day, startTime, endTime, title: 'Conc
+         +urrencia' });                                                  
+      33 +}                                                              
+      34 +                                                               
+      35 +function hhmm(minutes) {                                       
+      36 +  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:
+         +${String(minutes % 60).padStart(2, '0')}`;                     
+      37 +}                                                              
+      38 +                                                               
+      39 +test('la restricción bookings_no_overlap existe en la BD de tes
+         +t', async () => {                                              
+      40 +  const { rows } = await pool.query(                           
+     … 57 more lines (ctrl+o to expand)
+  ⎿  (timeout 6m 40s)
+
+⏺ Stack levantado. Corro los tests:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ 40/40 tres veces seguidas. Ahora la prueba manual con curl (como Luis, vía
+  nginx), el grep y el smoke e2e para descartar regresiones:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Solo falló el curl de la agenda, porque zsh interpretó el ? sin comillas. Lo
+  repito:
+
+  Ran 1 shell command (ctrl+o to expand)
+⏺ Todo verificado. Escribo el registro de la tarea, la entrada en la bitácora y
+  el commit:
+
+⏺ Bash(cat > docs/tareas/T3-reservas.md <<'EOF'
+      # T3 · API de reservas con garantía anti-choque y test de concurrencia…)
+  ⎿  Updated docs/03-bitacora.md (+6 -0)
+      26  - **17:27** · S2 · OK del responsable: los tests corren en seri
+          e (D-34, `--test-concurrency=1`) y el agente decide los mensaje
+          s, que quedan fijados en el spec §7 para que la reconstrucción 
+          use los mismos (D-35). Se actualizan decisiones, spec y backlog
+           antes del código.
+      27  - **~17:28** · S2 · Código de T2 escrito: migración literal del
+           §6.1 (extraída del spec), `migrate`, `time` (mínimo para el se
+          ed), `seed`, `auth` y `routes/auth`, `helpers.js` con `reservas
+          _test` y `auth.test.js`. Lockfile regenerado en `node:22-alpine
+          ` con `bcryptjs@3.0.3` y `jsonwebtoken@9.0.3`.
+      28  - **17:30** · S2 · Verificación tras `down -v` + `up -d --build
+          `: servicios `healthy`, `bookings_no_overlap` presente, seed 4/
+          5/1 con la demo el 2026-11-16 16:00–17:00 UTC, reiniciar `api` 
+          no duplica ni re-migra, `npm test` 11/11 tres veces, `curl` de 
+          login y `/me` correctos, smoke e2e `1 passed`. Registro en `doc
+          s/tareas/T2-bd-auth.md` y commit local de T2.
+      29 +                                                               
+      30 +## S3 · T3 API de reservas con garantía anti-choque (Claude Cod
+         +e, Opus 5.5)                                                   
+      31 +                                                               
+      32 +- **2026-11-15 ~17:35** · S3 · Al iniciar, el export de S2 se m
+         +ueve a `docs/sesiones/` y se commitea solo (`5b11ea8`). El agen
+         +te presenta el plan de T3 con 6 dudas y explica por qué el choq
+         +ue lo detecta la BD: el código no lee `bookings` antes del `INS
+         +ERT`, el único 409 sale de traducir el `23P01`, y el resultado 
+         +se cuenta en la BD.                                            
+      33 +- **17:42** · S3 · OK del responsable: dudas 1–5 como se propus
+         +ieron y el control negativo en su propio archivo. Se escriben D
+         +-36 a D-41 y se actualiza el spec (§7 mensajes, §5.2 y §8 contr
+         +ol negativo) antes del código.                                 
+      34 +- **17:47** · S3 · Código y tests escritos. Verificación tras `
+         +down -v` + `up -d --build`: servicios `healthy`; `npm test` 40/
+         +40 tres veces seguidas (1×201 + 19×409, escalonado sin pares so
+         +lapados, control sin restricción 20×201); `curl` como Luis: cho
+         +que con la demo → 409, 11–12 → 201, cancelar la demo de Ana → 4
+         +03, cancelar la suya → 200; smoke e2e `1 passed`. Registro en `
+         +docs/tareas/T3-reservas.md` y commit local de T3.              
+  ⎿  Created docs/tareas/T3-reservas.md (+68 -0)
+       1 +# T3 · API de reservas con garantía anti-choque y test de concu
+         +rrencia                                                        
+       2 +                                                               
+       3 +- **Sesión:** S3 · **Fecha:** 2026-11-15 · **Inicio–fin:** ~17:
+         +35–17:48                                                       
+       4 +- **Agente:** Claude Code (Opus 5.5)                           
+       5 +- **Sesión exportada:** `docs/sesiones/S3-t3-reservas.txt`     
+       6 +                                                               
+       7 +## Qué se pidió                                                
+       8 +T3 de `02-backlog.md`: reservar, consultar y cancelar por API c
+         +umpliendo R1–R13 (las que tocan a reservas), con la prueba de q
+         +ue la concurrencia no produce choques (spec §4, §6.1, §7, §8, §
+         +10).                                                           
+       9 +                                                               
+      10 +## Qué hizo el agente                                          
+      11 +- `api/src/time.js`: `utcToLocal`, `isValidDate`, `isValidTime`
+         + y `validateSlot` (R2 → R3 → R4 → R5 → R6 en hora local; devuel
+         +ve el intervalo en UTC).                                       
+      12 +- `api/src/errors.js`: `23P01` + `bookings_no_overlap` → 409 `B
+         +OOKING_CONFLICT`. Es el único sitio que produce ese código.    
+      13 +- `api/src/routes/rooms.js`: `GET /api/rooms` (`includeInactive
+         +=true` solo para admin).                                       
+      14 +- `api/src/routes/bookings.js`: `GET ?date`, `GET /mine`, `POST
+         +` (transacción `BEGIN` → `SELECT` de la sala → reglas → `INSERT
+         +` → `COMMIT` con un cliente del pool; sin `FOR SHARE`, que lleg
+         +a en T5) y `DELETE /:id` (404 → 403 → 409; la condición de R10 
+         +va dentro del propio `UPDATE`).                                
+      15 +- `api/src/app.js`: monta las rutas nuevas.                    
+      16 +- Tests: `bookings.test.js` (22), `rooms.test.js` (3), `concurr
+         +ency.test.js` (3), `concurrency-control.test.js` (1). `helpers.
+         +js` gana `loginAs` y `dates()` (fechas relativas a hoy).       
+      17 +- Docs: D-36 a D-41; spec §7 (mensajes), §5.2 y §8 (control neg
+         +ativo).                                                        
+      18 +                                                               
+      19 +**Por qué el 409 lo produce la BD y no otra cosa:** el `POST` n
+         +o lee `bookings` antes del `INSERT` (comprobado con `grep`: el 
+         +único `SELECT` previo es el de `rooms`). El único camino al 409
+         + es la traducción del `23P01`, y cualquier otro error saldría c
+         +omo 500. El resultado se cuenta en la BD (`count = 1`, self-joi
+         +n con 0 pares solapados). El control negativo, sin la restricci
+         +ón, deja entrar las 20 reservas.                               
+      20 +                                                               
+      21 +## Decisiones tomadas durante la tarea                         
+      22 +- D-36: mensajes de `INVALID_SLOT`, `OUTSIDE_BUSINESS_HOURS`, `
+         +IN_PAST`, `TOO_FAR_AHEAD`, `ROOM_INACTIVE`, `BOOKING_NOT_CANCEL
+         +LABLE` y `VALIDATION_ERROR` de reservas.                       
+      23 +- D-37: R6 permite hasta hoy + 30 días, inclusive.             
+      24 +- D-38: qué es formato inválido (400); el título se guarda reco
+         +rtado; fin ≤ inicio → `INVALID_SLOT`.                          
+      25 +- D-39: orden de errores en `DELETE`: 404 → 403 → 409.         
+      26 +- D-40: R7 y R10 se preparan en los tests con SQL directo.     
+      27 +- D-41: test de control negativo en su propio archivo.         
+      28 +                                                               
+      29 +## Verificación                                                
+      30 +| Criterio de aceptación | Comando / evidencia | Resultado |   
+      31 +|---|---|---|                                                  
+      32 +| 1. Reservas seguidas 10–11 y 11–12 → 201 | test `R1 · reserva
+         +s seguidas`; `curl` 11:00–12:00 en Sala 1 → 201 | ✅ |         
+      33 +| 2. Solapada → 409; otra sala → 201 | test `R1 · solapada`; `c
+         +url` como Luis contra la demo → 409 `BOOKING_CONFLICT` | ✅ |  
+      34 +| 3. Tras cancelar se puede volver a reservar | test `R11` | ✅
+         + |                                                             
+      35 +| 4. Concurrencia: 1×201 + 19×409; escalonado sin pares solapad
+         +os | `concurrency.test.js` (conteo y self-join en BD) + control
+         + negativo (sin restricción, 20×201) | ✅ |                     
+      36 +| 5. Empleado no cancela una reserva ajena (403); admin sí (200
+         +) | test `R9`; `curl` de Luis sobre la demo → 403 | ✅ |       
+      37 +| 6. `npm test` pasa 3 veces seguidas | `docker compose exec ap
+         +i npm test` ×3 | ✅ 40/40 en las 3 |                           
+      38 +| DoD: `down -v` + `up -d --build` sano | `docker compose ps` |
+         + ✅ db/api/web healthy |                                       
+      39 +| Sin regresiones | auth/health en la suite; `docker compose --
+         +profile e2e run --rm --build e2e` | ✅ `1 passed` |            
+      40 +                                                               
+     … 28 more lines (ctrl+o to expand)
+
+⏺ T3 está terminada y cumple su DoD. Los 40 tests de la API pasan en las 3
+  corridas seguidas, y está guardada en el commit local 4eb59fd (sin push).
+
+  Pruebas de concurrencia
+  - 20 reservas idénticas a la vez: 1 respuesta 201 y 19 respuestas 409
+    BOOKING_CONFLICT. Al contar en la base de datos queda 1 sola reserva.
+  - 20 reservas escalonadas a la vez: en la base de datos no hay ningún par
+    solapado.
+  - Control negativo (concurrency-control.test.js
+    (api/test/concurrency-control.test.js)): sin la restricción entran las 20
+    peticiones. Eso confirma que el código no tiene otra comprobación y que el
+    único 409 posible sale de la base de datos.
+  - Revisión del código: antes del INSERT solo se consulta la sala (rooms),
+    nunca las reservas.
+
+  Prueba manual con curl, entrando como Luis por el puerto 8080
+  - Reservar encima de la demo de Ana da 409; la franja seguida de 11:00 a 12:00
+    da 201.
+  - Cancelar la demo de Ana da 403; cancelar la suya da 200.
+
+  Resto de comprobaciones
+  - Tras down -v + up --build, los tres servicios quedan sanos.
+  - El smoke e2e da 1 passed, así que no hay regresiones.
+
+  Cambios principales
+  - time.js (api/src/time.js): validación de las reglas R2 a R6 en hora local.
+  - errors.js (api/src/errors.js): convierte el error 23P01 de PostgreSQL
+    en 409.
+  - Rutas nuevas: rooms.js (api/src/routes/rooms.js) y bookings.js
+    (api/src/routes/bookings.js).
+  - Tests: bookings, rooms, concurrency y concurrency-control.
+
+  Las decisiones D-36 a D-41 se escribieron en 00-decisiones.md
+  (docs/00-decisiones.md) antes del código. En el spec actualicé los mensajes de
+  error de §7, y en §5.2 y §8 añadí el test de control. También están
+  T3-reservas.md (docs/tareas/T3-reservas.md) y la entrada en la bitácora.
+
+  Lo único que falló fue un curl de la agenda: escribí la URL sin comillas y zsh
+  tomó el ? como comodín. Repetido entre comillas devolvió 200. No era un fallo
+  de la API.
+
+  Te falta exportar la sesión con /export a docs/sesiones/S3-t3-reservas.txt; la
+  commitearé al empezar T4.
+
+❯ Antes de exportar tengo una duda el control negativo quita la restriccion?
+  que pasa si las pruebas de concurrencia corren al mismo tiempo, no afecta a
+  las otras? Compruebalo y si esta bien exportamos
+
+⏺ Lo compruebo de cuatro formas: el orden y el aislamiento de la suite normal,
+  la base de datos de la demo, el orden invertido y qué pasa si se fuerza la
+  ejecución en paralelo.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Ahora el caso que preguntas: forzar que los archivos corran en paralelo, que
+  es lo que el script de test impide.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Sí, el control negativo quita la restricción, pero solo en la base de pruebas
+  de su propio archivo, y no afecta a las otras pruebas. Con npm test los
+  archivos nunca corren a la vez. Puedes exportar.
+
+  Comprobaciones
+  1. La suite corre de un archivo en uno. El script de test usa
+     --test-concurrency=1 (D-34). Cada archivo empieza borrando y volviendo a
+     crear reservas_test (base migrada y con el seed), así que cada uno arranca
+     con la restricción puesta.
+  2. La base de la demo no se toca. En reservas la restricción
+     bookings_no_overlap sigue presente.
+  3. El orden no importa.
+     - De control a concurrencia, en el mismo proceso: 4/4.
+     - De concurrencia a control y otra vez concurrencia, en procesos distintos:
+       todo pasa.
+     - Después del control, la prueba "la restricción existe en la BD de test"
+       sale bien, así que no queda quitada.
+  4. Forzando la ejecución en paralelo (--test-concurrency=2), fallan 4 de 5
+     pruebas. Las dos intentan crear reservas_test a la vez y Postgres devuelve
+     duplicate key ... pg_database_datname_index. Después, la suite normal
+     vuelve a dar 40/40.
+
+  En paralelo las pruebas fallan con un error claro, nunca pasan sin motivo.
+  Aunque el control quitara la restricción a mitad de otra prueba, esa prueba
+  fallaría: comprueba que la restricción existe y que entra exactamente 1
+  reserva.
+
+  El único riesgo es alguien que ejecute los archivos en paralelo a propósito, o
+  dos npm test a la vez, porque comparten reservas_test. Se podría blindar con
+  una base de pruebas por archivo, pero el spec §10 fija el nombre
+  reservas_test. No lo cambio salvo que me lo pidas.
+
+  En esta comprobación no cambié ningún archivo, así que no hace falta commit.
+  Exporta con /export a docs/sesiones/S3-t3-reservas.txt; la commitearé al
+  empezar T4.
+
+❯ prefiero blindarlo osea que el control use su propia base
+  reservas_test_control actualiza el spec y anotalo como decision y verifica
+  con los archivos en paralelo porfavor
+
+⏺ Primero la decisión D-42 y el spec; después el código.
+
+⏺ Bash(cat >> docs/00-decisiones.md <<'EOF'
+      | D-42 | 2026-11-15 | T3 | El control negativo (D-41) quita la restricción
+      en `reservas_test`, la misma base que usan las d…)
+  ⎿  Updated docs/00-decisiones.md (+1 -0)
+      52  | D-39 | 2026-11-15 | T3 | Orden de errores en `DELETE /api/boo
+          kings/:id` | 404 (no existe o `:id` no numérico) → 403 (no es d
+          ueño ni admin) → 409 `BOOKING_NOT_CANCELLABLE` (no activa o ya 
+          empezó) | No se revela el estado de reservas ajenas a quien no 
+          puede cancelarlas |
+      53  | D-40 | 2026-11-15 | T3 | ¿Cómo se prueban R7 (sala inactiva) 
+          y R10 (ya empezó) sin la API de T5 ni esperar al reloj? | El te
+          st prepara los datos por SQL directo en `reservas_test` (`UPDAT
+          E rooms SET is_active = false`, `INSERT` de una reserva con ini
+          cio pasado) | No adelanta el CRUD de salas de T5 y no depende d
+          e la hora en que se ejecuta el test |
+      54  | D-41 | 2026-11-15 | T3 | ¿Cómo se demuestra que el 409 lo pro
+          duce la restricción y no otra comprobación? | Test de control n
+          egativo en su propio archivo `api/test/concurrency-control.test
+          .js`: en `reservas_test` borra `bookings_no_overlap` y lanza la
+          s mismas 20 peticiones idénticas → entran más de una (todas 201
+          ). Archivo propio porque `helpers.js` recrea la BD por archivo,
+           así que quitar la restricción no afecta a las demás pruebas. A
+          ñadido al spec §5.2 y §8 | Si sin la restricción no hay choques
+           detectados, no existe otra protección en el código: la única f
+          uente del 409 es la BD |
+      55 +| D-42 | 2026-11-15 | T3 | El control negativo (D-41) quita la 
+         +restricción en `reservas_test`, la misma base que usan las demá
+         +s pruebas. Si alguien ejecuta los archivos en paralelo, o lanza
+         + dos `npm test` a la vez, las ejecuciones chocan | El control n
+         +egativo usa su propia base `reservas_test_control`. `setupTestD
+         +b(dbName)` recibe el nombre (por defecto `reservas_test`) y fij
+         +a `DATABASE_URL` antes de cargar el pool. Spec §8 y §10 actuali
+         +zados. `--test-concurrency=1` (D-34) se mantiene para el resto 
+         +| Quitar la restricción queda aislado físicamente, no solo por 
+         +el orden de ejecución: aunque el control corra a la vez que las
+         + pruebas de concurrencia, nunca les quita la garantía. Lo pidió
+         + el responsable |                                              
+  ⎿  Updated docs/01-spec.md (+2 -2)
+      301  
+      302  - La garantía es R1 en BD. El INSERT es una sola sentencia; Po
+           stgreSQL serializa el chequeo de la restricción, así que de N 
+           inserciones simultáneas que se solapan, **exactamente una** ti
+           ene éxito.
+      303  - **Test obligatorio** (`api/test/concurrency.test.js`): lanza
+           r con `Promise.all` **20** `POST /api/bookings` idénticos (mis
+           mo usuario, sala y horario) contra la BD real → exactamente 1 
+           respuesta 201, 19 respuestas 409 `BOOKING_CONFLICT`, y `SELECT
+            count(*)` de reservas activas de ese horario = 1. Segundo cas
+           o: 20 peticiones de **distintos horarios solapados parcialment
+           e** (p. ej. inicios escalonados de 15 min con 60 min de duraci
+           ón) → en BD no existe ningún par solapado (verificado con un s
+           elf-join).
+      304 -- **Control negativo** (`api/test/concurrency-control.test.js`
+          -, D-41, en archivo propio): borra `bookings_no_overlap` en `re
+          -servas_test` y repite las 20 peticiones idénticas → todas 201.
+          - Demuestra que no hay otra comprobación en el código: el único
+          - origen del 409 es la restricción.                            
+      304 +- **Control negativo** (`api/test/concurrency-control.test.js`
+          +, D-41, D-42, en archivo propio): usa su propia base **`reserv
+          +as_test_control`** (no `reservas_test`), borra en ella `bookin
+          +gs_no_overlap` y repite las 20 peticiones idénticas → todas 20
+          +1. Demuestra que no hay otra comprobación en el código: el úni
+          +co origen del 409 es la restricción.                          
+      305  - El pool de `pg` debe tener al menos 10 conexiones para que l
+           a concurrencia sea real.
+      306  
+      307  ### 8.1 Carrera "desactivar sala" vs "crear reserva" (R12, D-2
+           6)
+     ...
+      367  | API | `node:test` + `supertest` contra PostgreSQL real | `do
+           cker compose exec api npm test` | Auth, roles, reglas R1–R13, 
+           concurrencia |
+      368  | UI | Playwright en contenedor | `docker compose --profile e2
+           e run --rm --build e2e` | Flujos de usuario reales vía nginx |
+      369  
+      370 -- Los tests de API usan una base **`reservas_test`** que `test
+          -/helpers.js` borra y recrea (conectándose a la BD `postgres` d
+          -el mismo servidor), migra y siembra. Nunca tocan la base `rese
+          -rvas` de la demo.                                             
+      370 +- Los tests de API usan una base **`reservas_test`** que `test
+          +/helpers.js` borra y recrea (conectándose a la BD `postgres` d
+          +el mismo servidor), migra y siembra. Nunca tocan la base `rese
+          +rvas` de la demo. Excepción: el control negativo del §8 usa **
+          +`reservas_test_control`**, para que quitar la restricción nunc
+          +a afecte a otras pruebas aunque corran en paralelo (D-42). `se
+          +tupTestDb(dbName)` recibe el nombre de la base (por defecto `r
+          +eservas_test`).                                               
+      371  - Las fechas de los tests se calculan relativas a "hoy" (próxi
+           mo día hábil, etc.), nunca fijas.
+      372  - Los tests e2e dejan capturas en `e2e/results/*.png` y son re
+           petibles: antes de cada test cancelan vía API las reservas fut
+           uras de los usuarios que usan (excepto la reserva demo de Ana)
+           .
+      373  
+
+⏺ Bash(grep -ln "src/db\|helpers" api/test/*.js && python3 - <<'EOF'
+      p='api/test/helpers.js'; s=open(p).read()…)
+  ⎿  Updated api/test/concurrency-control.test.js (+5 -3)
+      1  // Control negativo (D-41): sin la restricción bookings_no_overl
+         ap, las mismas 20 peticiones
+      2  // idénticas entran todas. Demuestra que el código no tiene ning
+         una otra comprobación de
+      3  // solapamiento: el único origen del 409 BOOKING_CONFLICT es Pos
+         tgreSQL.
+      4 -// Va en su propio archivo: helpers.js recrea reservas_test por 
+        -archivo, así que quitar la                                      
+      5 -// restricción aquí no afecta al resto de pruebas.              
+      4 +// Usa su propia base reservas_test_control (D-42): quitar la re
+        +stricción aquí nunca afecta                                     
+      5 +// a las demás pruebas, aunque corran en paralelo.              
+      6  const { test, before, after } = require('node:test');
+      7  const assert = require('node:assert');
+      8  const request = require('supertest');
+     ...
+      16  
+      17  before(async () => {
+      18    let app;
+      19 -  ({ app, pool } = await setupTestDb());                       
+      19 +  ({ app, pool } = await setupTestDb('reservas_test_control'));
+      20 +  const { rows } = await pool.query('SELECT current_database() 
+         +AS db');                                                       
+      21 +  assert.strictEqual(rows[0].db, 'reservas_test_control');     
+      22    server = app.listen(0);
+      23    token = await loginAs(app, 'luis@empresa.local');
+      24    day = dates().next;
+  ⎿  Updated api/test/helpers.js (+22 -9)
+       1  // Spec §10: los tests usan la BD reservas_test, que se borra y
+           recrea
+       2  // (conectándose a la BD `postgres` del mismo servidor), se mig
+          ra y se siembra.
+       3 -// Nunca tocan la BD `reservas` de la demo.                    
+       3 +// Nunca tocan la BD `reservas` de la demo. El control negativo
+         + usa su propia                                                 
+       4 +// base reservas_test_control (D-42), por eso el nombre es un p
+         +arámetro.                                                      
+       5 +const path = require('node:path');                             
+       6  const { Client } = require('pg');
+       7  
+       6 -const TEST_DB = 'reservas_test';                               
+       8 +const DEFAULT_TEST_DB = 'reservas_test';                       
+       9  const baseUrl = new URL(process.env.DATABASE_URL);
+      10  const adminUrl = new URL(baseUrl);
+      11  adminUrl.pathname = '/postgres';
+      10 -const testUrl = new URL(baseUrl);                              
+      11 -testUrl.pathname = `/${TEST_DB}`;                              
+      12  
+      13 -// Debe ocurrir antes de cargar src/db, que crea el pool desde 
+         -DATABASE_URL.                                                  
+      14 -process.env.DATABASE_URL = testUrl.toString();                 
+      13 +function urlFor(dbName) {                                      
+      14 +  const url = new URL(baseUrl);                                
+      15 +  url.pathname = `/${dbName}`;                                 
+      16 +  return url.toString();                                       
+      17 +}                                                              
+      18 +                                                               
+      19 +// Valor por defecto: nada de un test puede llegar a la BD de l
+         +a demo aunque cargue src/db antes.                             
+      20 +process.env.DATABASE_URL = urlFor(DEFAULT_TEST_DB);            
+      21 +                                                               
+      22 +async function setupTestDb(dbName = DEFAULT_TEST_DB) {         
+      23 +  if (!/^reservas_test(_[a-z]+)?$/.test(dbName)) throw new Erro
+         +r(`BD de test no válida: ${dbName}`);                          
+      24 +  // src/db crea el pool desde DATABASE_URL al cargarse: si ya 
+         +se cargó, apuntaría a otra BD.                                 
+      25 +  if (require.cache[path.join(__dirname, '../src/db.js')]) {   
+      26 +    throw new Error('src/db ya estaba cargado antes de setupTes
+         +tDb');                                                         
+      27 +  }                                                            
+      28 +  process.env.DATABASE_URL = urlFor(dbName);                   
+      29  
+      16 -async function setupTestDb() {                                 
+      30    const admin = new Client({ connectionString: adminUrl.toStrin
+          g() });
+      31    await admin.connect();
+      32    try {
+      20 -    await admin.query(`DROP DATABASE IF EXISTS ${TEST_DB} WITH 
+         -(FORCE)`);                                                     
+     … 6 more lines (ctrl+o to expand)
+
+⏺ Reconstruyo la API para que tome los cambios. Después corro el control y la
+  concurrencia en paralelo varias veces y la suite normal tres veces:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ En paralelo la suite pasa 4/4 en las tres ejecuciones; solo
+  reservas_test_control pierde la restricción. Ahora lanzo la suite normal tres
+  veces, el smoke e2e y la suite completa en paralelo. · summary
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ La protección aísla el control como se esperaba; la suite completa en paralelo
+  sigue chocando por reservas_test, y --test-concurrency=1 lo resuelve (D-34).
+  Ahora actualizo el registro y la bitácora, y hago el commit. · summary
+
+⏺ Bash(T=$(date '+%H:%M') && python3 - <<'EOF'
+      p='docs/tareas/T3-reservas.md'; s=open(p).read()…)
+  ⎿  Updated docs/03-bitacora.md (+2 -0)
+      32  - **2026-11-15 ~17:35** · S3 · Al iniciar, el export de S2 se m
+          ueve a `docs/sesiones/` y se commitea solo (`5b11ea8`). El agen
+          te presenta el plan de T3 con 6 dudas y explica por qué el choq
+          ue lo detecta la BD: el código no lee `bookings` antes del `INS
+          ERT`, el único 409 sale de traducir el `23P01`, y el resultado 
+          se cuenta en la BD.
+      33  - **17:42** · S3 · OK del responsable: dudas 1–5 como se propus
+          ieron y el control negativo en su propio archivo. Se escriben D
+          -36 a D-41 y se actualiza el spec (§7 mensajes, §5.2 y §8 contr
+          ol negativo) antes del código.
+      34  - **17:47** · S3 · Código y tests escritos. Verificación tras `
+          down -v` + `up -d --build`: servicios `healthy`; `npm test` 40/
+          40 tres veces seguidas (1×201 + 19×409, escalonado sin pares so
+          lapados, control sin restricción 20×201); `curl` como Luis: cho
+          que con la demo → 409, 11–12 → 201, cancelar la demo de Ana → 4
+          03, cancelar la suya → 200; smoke e2e `1 passed`. Registro en `
+          docs/tareas/T3-reservas.md` y commit local de T3.
+      35 +- **~17:52** · S3 · Duda del responsable: ¿el control negativo 
+         +afecta a otras pruebas si corren a la vez? Comprobación: en ser
+         +ie no afecta (también con el orden invertido), pero forzando el
+         + paralelo el control y la concurrencia chocaban al recrear `res
+         +ervas_test`. El responsable pide blindarlo.                    
+      36 +- **17:55** · S3 · D-42 y spec §8/§10 escritos antes del código
+         +. El control usa `reservas_test_control` (`setupTestDb(dbName)`
+         +). Verificación: control ‖ concurrencia en paralelo 4/4 tres ve
+         +ces; la restricción solo falta en `reservas_test_control`; `npm
+         + test` 40/40 ×3; smoke e2e `1 passed`. La suite completa forzad
+         +a en paralelo sigue fallando porque los demás archivos comparte
+         +n `reservas_test` (cubierto por D-34). Registro ampliado en `do
+         +cs/tareas/T3-reservas.md` y commit local.                      
+  ⎿  Updated docs/tareas/T3-reservas.md (+15 -0)
+      25  - D-39: orden de errores en `DELETE`: 404 → 403 → 409.
+      26  - D-40: R7 y R10 se preparan en los tests con SQL directo.
+      27  - D-41: test de control negativo en su propio archivo.
+      28 +- D-42: el control negativo usa su propia base `reservas_test_c
+         +ontrol` (ajuste pedido por el responsable tras cerrar la tarea)
+         +.                                                              
+      29  
+      30  ## Verificación
+      31  | Criterio de aceptación | Comando / evidencia | Resultado |
+     ...
+      60  ## Problemas y correcciones
+      61  - El primer `curl` de la agenda falló porque zsh interpretó el 
+          `?` de la URL como un comodín. Se repitió con la URL entre comi
+          llas: 200, solo con la demo. No era un fallo de la API.
+      62  
+      63 +## Ajuste posterior: aislamiento del control negativo (D-42)   
+      64 +- **Duda del responsable:** el control quita la restricción; ¿a
+         +fecta a otras pruebas si corren a la vez?                      
+      65 +- **Comprobación previa:** con `npm test` (en serie) no afecta.
+         + En orden directo e invertido todo pasa y `reservas` conserva l
+         +a restricción. Pero forzando `--test-concurrency=2`, el control
+         + y la concurrencia chocaban al recrear `reservas_test` (`duplic
+         +ate key ... pg_database_datname_index`).                       
+      66 +- **Cambio:** `setupTestDb(dbName)` acepta el nombre de la base
+         + (solo `reservas_test` o `reservas_test_<sufijo>`, y falla si `
+         +src/db` ya estaba cargado). El control usa `reservas_test_contr
+         +ol` y comprueba `current_database()`. Spec §8 y §10 actualizado
+         +s.                                                             
+      67 +- **Verificación:**                                            
+      68 +                                                               
+      69 +| Comprobación | Resultado |                                   
+      70 +|---|---|                                                      
+      71 +| `node --test --test-concurrency=2 test/concurrency-control.te
+         +st.js test/concurrency.test.js` ×3 | ✅ 4/4 en las 3 |         
+      72 +| Restricción por base tras las pruebas | `reservas` 1 · `reser
+         +vas_test` 1 · `reservas_test_control` 0 |                      
+      73 +| `npm test` ×3 | ✅ 40/40 en las 3 |                          
+      74 +| Smoke e2e | ✅ `1 passed` |                                  
+      75 +| Suite completa forzada con `--test-concurrency=4` | ❌ espera
+         +do: auth, bookings, rooms, health y concurrency comparten `rese
+         +rvas_test`; por eso `npm test` las ejecuta en serie (D-34). Que
+         +da fuera del alcance de D-42 |                                 
+      76 +                                                               
+      77  ## DoD
+      78  - [x] Criterios de aceptación cumplidos
+      79  - [x] `down -v` + `up --build` sano
+
+⏺ El control negativo ya usa su propia base, reservas_test_control. En paralelo
+  con las pruebas de concurrencia pasa 4/4 en las tres corridas, y está guardado
+  en el commit local 0898405 (sin push).
+
+  Cambios
+  - Primero anoté la decisión D-42 en 00-decisiones.md (docs/00-decisiones.md) y
+    actualicé el spec en §8 y §10. Después escribí el código.
+  - helpers.js (api/test/helpers.js): setupTestDb(dbName) recibe el nombre de la
+    base, que por defecto sigue siendo reservas_test. Solo acepta nombres
+    reservas_test o reservas_test_<algo>. También falla si el pool de la base ya
+    estaba cargado, porque entonces apuntaría a otra base.
+  - concurrency-control.test.js (api/test/concurrency-control.test.js): usa
+    reservas_test_control y comprueba con current_database() que está en esa
+    base antes de quitar la restricción.
+
+  Resultados
+  - Control y concurrencia a la vez (--test-concurrency=2), tres veces: 4/4 en
+    cada corrida. Antes del cambio fallaban 4 de 5.
+  - Restricción al terminar: sigue en reservas y en reservas_test; solo falta en
+    reservas_test_control.
+  - npm test tres veces seguidas: 40/40 en las tres.
+  - Smoke e2e: 1 passed.
+
+  Si se fuerza en paralelo la suite completa (--test-concurrency=4), sigue
+  fallando. El control ya no participa en eso: los demás archivos comparten
+  reservas_test y chocan entre sí al recrearla. Por eso npm test los ejecuta en
+  serie (D-34), y lo dejé anotado en el registro de la tarea.
+
+  Actualicé T3-reservas.md (docs/tareas/T3-reservas.md) con una sección sobre
+  este ajuste y añadí la entrada en la bitácora.
+
+  Ya puedes exportar la sesión con /export a docs/sesiones/S3-t3-reservas.txt.
+  La commitearé al empezar T4.
