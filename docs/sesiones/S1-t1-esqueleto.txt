@@ -1,0 +1,753 @@
+
+❯ <ide_opened_file>The user opened the file
+  /Users/superdev/Documents/reservas-salas/S0-planificacion.txt in the IDE.
+  This may or may not be related to the current task.</ide_opened_file>
+
+❯ Empezamos la T1. Primero guarda en tu memoria que si hay algun archivo
+  exportado de sesion anterior al inicar una nueva, muevelo a docs/sesiones y
+  haz commit de ese export, entendido esto dame el plan corto de la T1 y espera
+  mi OK.
+
+  Read 2 files, ran 2 shell commands, wrote 2 memories (ctrl+o to expand)
+
+⏺ Memoria guardada. Aplico la regla ahora: el export de S0 ya está en
+  docs/sesiones/ pero sin commitear, así que hago su commit.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Hecho: guardé la regla en memoria y la apliqué. El export de S0 ya estaba en
+  docs/sesiones/ pero sin commitear, así que hice el commit fee0cf4 S0: export
+  de la sesión de planificación.
+
+  Plan T1: Esqueleto (Docker Compose, API health, web y e2e smoke)
+
+  Archivos que voy a crear
+  - .gitignore: node_modules, dist, e2e/results, e2e/test-results.
+  - docker-compose.yml: los servicios db, api, web y e2e tal como dice el §5.3:
+    - healthchecks, depends_on: service_healthy y el volumen pgdata;
+    - solo se publica 8080:80;
+    - variables de api con valores por defecto;
+    - e2e con profiles: ["e2e"], BASE_URL=http://web y el volumen ./e2e/results.
+  - api/:
+    - Dockerfile: node:22-alpine y npm ci con devDependencies.
+    - package.json (CommonJS, npm test = node --test test/) y package-lock.json.
+    - src/index.js: espera a la BD (reintento cada 1 s, máx. 30) y luego
+      escucha.
+    - src/app.js, src/db.js (Pool desde DATABASE_URL, max: 10) y src/errors.js
+      (AppError y middleware con el formato del §7).
+    - src/routes/health.js (SELECT 1: 200 si va bien, 503
+      {status:"error",db:"error"} si falla).
+    - test/health.test.js.
+  - web/:
+    - Dockerfile multi-stage (node:22-alpine para compilar, nginx:1.27-alpine
+      para servir) y nginx.conf (SPA fallback y proxy /api/ → http://api:3000).
+    - package.json, package-lock.json, vite.config.js e index.html.
+    - src/main.jsx y src/App.jsx: muestra API: ok / API: error con
+      data-testid="api-status".
+  - e2e/:
+    - Dockerfile desde mcr.microsoft.com/playwright:v1.65.1-noble.
+    - package.json y package-lock.json.
+    - playwright.config.js: chromium, reporter line, outputDir:
+      results/test-results.
+    - tests/smoke.spec.js: deja la captura results/smoke.png.
+
+  Pasos
+  1. Escribir los archivos con las versiones exactas del §5.1.
+  2. Generar los package-lock.json sin instalar Node en el Mac: docker run
+     node:22-alpine npm install --package-lock-only. Así no quedan node_modules
+     en el host.
+  3. Levantar y verificar.
+  4. Cerrar la tarea: docs/tareas/T1-esqueleto.md, entrada en la bitácora y
+     commit T1: ....
+
+  Cómo lo verifico (criterios 1 a 5 del backlog)
+  - docker compose down -v && docker compose up -d --build, y luego docker
+    compose ps (db, api y web deben salir healthy).
+  - curl -s localhost:8080/api/health debe devolver {"status":"ok","db":"ok"}.
+  - docker compose exec api npm test.
+  - Skill verificar-ui: docker compose --profile e2e run --rm --build e2e y leer
+    e2e/results/smoke.png.
+  - Comprobar que docker compose up sin flags no arranca e2e.
+  - Ya miré que el puerto 8080 está libre.
+
+  Dudas abiertas (el spec no las resuelve; las anoto en 00-decisiones.md antes
+  de escribir código)
+  1. Dependencias en T1: ¿meto ya todas las del §5.1 (bcryptjs, jsonwebtoken,
+     react-router-dom) o solo las que usa T1 (express, pg, supertest; react,
+     react-dom, vite y el plugin)? Propongo solo las de T1 y añadir el resto en
+     T2 y T4.
+  2. Arranque de la API: el §5.4 dice "migrar → seed → escuchar", pero migrar y
+     seed son de T2. En T1 propongo solo "esperar BD → escuchar", y en T2 añado
+     los otros dos pasos.
+  3. BD del test de health: helpers.js y reservas_test son de T2. En T1 el test
+     de health usaría el pool normal contra reservas, con un SELECT 1 que no
+     toca datos. ¿Te vale así?
+  4. .dockerignore: no aparece en la estructura del §5.2. Propongo no crearlo:
+     como genero el lock sin node_modules locales, no hace falta.
+
+  Espero tu OK, y tu respuesta a las cuatro dudas, para empezar a escribir
+  código.
+
+❯ <ide_opened_file>The user opened the file
+  /Users/superdev/Documents/reservas-salas/docs/03-bitacora.md in the IDE. This
+  may or may not be related to the current task.</ide_opened_file>
+
+❯ OK al plan, antes de empezar lo del export agregalo tambien a CLAUDE.md para
+  que quede registrada la instruccion y persista por ejemplo en reconstruccion
+  en otra maquina porque creo que tu memoria es solo local. Sobre las d udas:
+  1, 2 y 3 me parece bien como las propones pero en la 4 si seria bueno que
+  crees el .dockerignore en api, web y e2e, para  que las imagenes se
+  construyan solo con lo que esta en el repo, sin archivos temporales ni nada
+  local, para que el resultado no dependa de la maquina esto puedes anotarlo
+  como decision y agregalo al spec por faovr.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Primero la regla en CLAUDE.md, después las decisiones y el spec, y luego el
+  código.
+
+⏺ Update(CLAUDE.md)
+  ⎿  Added 1 line
+      16  
+      17  Trabajo normal con el responsable, una tarea por sesión.
+      18  
+      19 +0. **Al iniciar la sesión, guarda el export de la anterior:** s
+         +i hay un archivo exportado de una sesión anterior (`/export`, p
+         +. ej. `S1-*.txt`) fuera de `docs/sesiones/` o sin commitear, mu
+         +évelo a `docs/sesiones/` y haz un commit local solo con ese exp
+         +ort (`SX: export de la sesión ...`) antes de empezar la tarea. 
+      20  1. **Plan corto antes de escribir código:** al empezar una tare
+          a, presenta un plan breve (archivos que vas a crear o cambiar, 
+          pasos, cómo lo vas a verificar y dudas abiertas) y **espera el 
+          OK del responsable**. No escribas código antes de ese OK.
+      21  2. **Si el spec no resuelve algo, pregunta.** No lo decidas tú.
+           Con la respuesta, **primero** escribe la decisión en `docs/00-
+          decisiones.md` → "Decisiones durante la ejecución" (fecha, tare
+          a, duda, decisión, porqué) y **después** escribe el código.
+      22  3. Al cerrar cada tarea, haz el registro obligatorio (ver abajo
+          ).
+
+⏺ Update(docs/00-decisiones.md)
+  ⎿  Added 8 lines
+      35  ## Decisiones durante la ejecución
+      36  
+      37  _(se añaden aquí con fecha, tarea y motivo)_
+      38 +                                                               
+      39 +| ID | Fecha | Tarea | Duda | Decisión | Porqué |              
+      40 +|---|---|---|---|---|---|                                      
+      41 +| D-28 | 2026-11-15 | T1 | ¿Se instalan en T1 todas las depende
+         +ncias del §5.1? | No: cada tarea añade solo las que usa. T1: ap
+         +i `express`, `pg`, `supertest`; web `react`, `react-dom`, `vite
+         +`, `@vitejs/plugin-react`; e2e `@playwright/test`. `bcryptjs` y
+         + `jsonwebtoken` entran en T2 y `react-router-dom` en T4, siempr
+         +e con la versión exacta del §5.1 | Evita dependencias sin uso y
+         + mantiene cada commit coherente con su tarea; las versiones sig
+         +uen fijadas por el spec |                                      
+      42 +| D-29 | 2026-11-15 | T1 | El §5.4 pide "migrar → seed → escuch
+         +ar", pero migraciones y seed son de T2 | En T1 `index.js` solo 
+         +espera a la BD (reintento cada 1 s, máx. 30) y escucha; T2 añad
+         +e migrar y seed entre ambos pasos | Respeta "no adelantar traba
+         +jo de tareas futuras" sin cambiar el comportamiento final del §
+         +5.4 |                                                          
+      43 +| D-30 | 2026-11-15 | T1 | `test/helpers.js` y la BD `reservas_
+         +test` son de T2: ¿contra qué BD corre el test de health en T1? 
+         +| En T1 el test usa el pool normal (`DATABASE_URL`, BD `reserva
+         +s`); solo hace `SELECT 1` y no toca datos. Desde T2 todos los t
+         +ests usan `helpers.js` y `reservas_test` | Es la opción más sim
+         +ple que verifica el endpoint real sin adelantar T2 |           
+      44 +| D-31 | 2026-11-15 | T1 | ¿Hace falta `.dockerignore`? (no est
+         +aba en el §5.2) | Sí: `api/`, `web/` y `e2e/` tienen `.dockerig
+         +nore` que excluye `node_modules`, `dist`, resultados de e2e, `.
+         +env*`, logs y archivos del sistema. Añadido al spec §5.2 | Las 
+         +imágenes se construyen solo con lo versionado en el repo, sin a
+         +rchivos temporales ni locales; el resultado no depende de la má
+         +quina (refuerza D-07) |                                        
+      45 +| D-32 | 2026-11-15 | S1 | ¿Qué se hace con el export de la ses
+         +ión anterior? | Al iniciar cada sesión (modo Desarrollo), si ha
+         +y un export de la sesión anterior fuera de `docs/sesiones/` o s
+         +in commitear, el agente lo mueve allí y hace un commit local so
+         +lo con él. Regla escrita en `CLAUDE.md` | La memoria del agente
+         + es local a la máquina; en `CLAUDE.md` la regla viaja con el re
+         +positorio |                                                    
+
+⏺ Update(docs/01-spec.md)
+  ⎿  Added 1 line, removed 1 line
+       94  docker-compose.yml
+       95  .gitignore                 # node_modules, dist, e2e/results, 
+           e2e/test-results
+       96  api/
+       97 -  Dockerfile                                                  
+       97 +  Dockerfile  .dockerignore                                   
+       98    package.json  package-lock.json
+       99    migrations/001_init.sql
+      100    src/
+
+⏺ Update(docs/01-spec.md)
+  ⎿  Added 1 line
+      112      auth.test.js  rooms.test.js  bookings.test.js  concurrency
+           .test.js  room-lock.test.js
+      113  web/
+      114    Dockerfile               # multi-stage: node build → nginx
+      115 +  .dockerignore                                               
+      116    nginx.conf
+      117    package.json  package-lock.json  vite.config.js  index.html
+      118    src/ main.jsx  App.jsx  api.js  auth.jsx  pages/*.jsx  compo
+           nents/*.jsx  styles.css
+
+⏺ Update(docs/01-spec.md)
+  ⎿  Added 12 lines
+      118    src/ main.jsx  App.jsx  api.js  auth.jsx  pages/*.jsx  compo
+           nents/*.jsx  styles.css
+      119  e2e/
+      120    Dockerfile               # FROM imagen playwright; npm ci; c
+           opia tests
+      121 +  .dockerignore                                               
+      122    package.json  package-lock.json  playwright.config.js
+      123    tests/ smoke.spec.js  empleado.spec.js  admin.spec.js
+      124    results/                 # capturas (montado como volumen, i
+           gnorado por git)
+      125  ```
+      126  
+      127 +**`.dockerignore`** (D-31) en `api/`, `web/` y `e2e/`, para qu
+          +e la imagen se construya solo con lo versionado en el repo:   
+      128 +```                                                           
+      129 +node_modules                                                  
+      130 +dist                                                          
+      131 +results                                                       
+      132 +test-results                                                  
+      133 +.env*                                                         
+      134 +*.log                                                         
+      135 +.DS_Store                                                     
+      136 +```                                                           
+      137 +                                                              
+      138  ### 5.3 docker-compose.yml (contrato)
+      139  
+      140  | Servicio | Build/imagen | Puertos | Depende de | Healthcheck
+            |
+
+⏺ Update(docs/02-backlog.md)
+  ⎿  Added 1 line
+      44  - **Spec:** §5 (completo), §7.2 fila `GET /api/health`, §9 "Pág
+          ina inicial antes del login", §9.1 (`api-status`), §10, §10.1 s
+          moke.
+      45  - **Alcance:**
+      46    - `.gitignore`, `docker-compose.yml` con los 4 servicios del 
+          §5.3 (healthchecks, perfil `e2e`).
+      47 +  - `.dockerignore` en `api/`, `web/` y `e2e/` con el contenido
+         + del §5.2 (D-31).                                              
+      48    - `api/`: Dockerfile (`node:22-alpine`, `npm ci`, incluye dev
+          Dependencies para poder ejecutar tests), `package.json` con ver
+          siones exactas, `src/index.js`, `src/app.js`, `src/db.js`, `src
+          /errors.js`, `routes/health.js`. Script `npm test` = `node --te
+          st test/`.
+      49    - `web/`: Vite + React, `nginx.conf` (SPA fallback a `index.h
+          tml` y proxy `/api/` → `http://api:3000`), Dockerfile multi-sta
+          ge. Página que muestra `API: ok` / `API: error` con `data-testi
+          d="api-status"`.
+      50    - `e2e/`: Dockerfile desde la imagen de Playwright, `playwrig
+          ht.config.js` (baseURL desde `BASE_URL`, solo chromium, reporte
+          r `line`, `outputDir: results/test-results`), `tests/smoke.spec
+          .js` con captura `results/smoke.png`.
+
+⏺ Decisiones y spec listos. La regla ya está en CLAUDE.md, así que borro la
+  memoria local para no tener la regla en dos sitios. Ahora escribo el código.
+
+⏺ Bash(rm /Users/superdev/.claude/projects/-Users-superdev-Documents-reservas-sa
+      las/memory/session-export-commit.md && : >
+      /Users/superdev/.claude/projects/-Users-supe…)
+  ⎿  Created .gitignore (+5 -0)
+      1 +node_modules                                                    
+      2 +dist                                                            
+      3 +e2e/results                                                     
+      4 +e2e/test-results                                                
+      5 +.DS_Store                                                       
+  ⎿  Created api/.dockerignore (+7 -0)
+      1 +node_modules                                                    
+      2 +dist                                                            
+      3 +results                                                         
+      4 +test-results                                                    
+      5 +.env*                                                           
+      6 +*.log                                                           
+      7 +.DS_Store                                                       
+  ⎿  Created e2e/.dockerignore (+7 -0)
+      1 +node_modules                                                    
+      2 +dist                                                            
+      3 +results                                                         
+      4 +test-results                                                    
+      5 +.env*                                                           
+      6 +*.log                                                           
+      7 +.DS_Store                                                       
+  ⎿  Created web/.dockerignore (+7 -0)
+      1 +node_modules                                                    
+      2 +dist                                                            
+      3 +results                                                         
+      4 +test-results                                                    
+      5 +.env*                                                           
+      6 +*.log                                                           
+      7 +.DS_Store                                                       
+  ⎿  (files that changed while this command ran, by the command or by
+     another process; a convenience view, not a review or audit of the
+     command)
+
+⏺ Write(docker-compose.yml)
+  ⎿  Wrote 59 lines to docker-compose.yml
+       1 services:
+       2   db:
+       3     image: postgres:16-alpine
+       4     environment:
+       5       POSTGRES_DB: reservas
+       6       POSTGRES_USER: reservas
+       7       POSTGRES_PASSWORD: reservas
+       8     volumes:
+       9       - pgdata:/var/lib/postgresql/data
+      10     healthcheck:
+     … +49 lines (ctrl+o to expand)
+
+⏺ Bash(cd /Users/superdev/Documents/reservas-salas
+      cat > api/package.json <<'EOF'…)
+  ⎿  Created api/Dockerfile (+7 -0)
+      1 +FROM node:22-alpine                                             
+      2 +WORKDIR /app                                                    
+      3 +COPY package.json package-lock.json ./                          
+      4 +RUN npm ci                                                      
+      5 +COPY . .                                                        
+      6 +EXPOSE 3000                                                     
+      7 +CMD ["node", "src/index.js"]                                    
+  ⎿  Created api/package.json (+18 -0)
+       1 +{                                                              
+       2 +  "name": "reservas-api",                                      
+       3 +  "version": "1.0.0",                                          
+       4 +  "private": true,                                             
+       5 +  "type": "commonjs",                                          
+       6 +  "main": "src/index.js",                                      
+       7 +  "scripts": {                                                 
+       8 +    "start": "node src/index.js",                              
+       9 +    "test": "node --test test/"                                
+      10 +  },                                                           
+      11 +  "dependencies": {                                            
+      12 +    "express": "5.3.0",                                        
+      13 +    "pg": "8.23.1"                                             
+      14 +  },                                                           
+      15 +  "devDependencies": {                                         
+      16 +    "supertest": "7.3.2"                                       
+      17 +  }                                                            
+      18 +}                                                              
+  ⎿  Created api/src/app.js (+16 -0)
+       1 +const express = require('express');                            
+       2 +const healthRouter = require('./routes/health');               
+       3 +const { notFoundHandler, errorHandler } = require('./errors'); 
+       4 +                                                               
+       5 +function createApp() {                                         
+       6 +  const app = express();                                       
+       7 +  app.use(express.json());                                     
+       8 +                                                               
+       9 +  app.use('/api/health', healthRouter);                        
+      10 +                                                               
+      11 +  app.use('/api', notFoundHandler);                            
+      12 +  app.use(errorHandler);                                       
+      13 +  return app;                                                  
+      14 +}                                                              
+      15 +                                                               
+      16 +module.exports = { createApp };                                
+  ⎿  Created api/src/db.js (+9 -0)
+      1 +const { Pool } = require('pg');                                 
+      2 +                                                                
+      3 +// Al menos 10 conexiones para que la concurrencia sea real (spe
+        +c §8).                                                          
+      4 +const pool = new Pool({                                         
+      5 +  connectionString: process.env.DATABASE_URL,                   
+      6 +  max: 10,                                                      
+      7 +});                                                             
+      8 +                                                                
+      9 +module.exports = { pool };                                      
+  ⎿  Created api/src/errors.js (+30 -0)
+       1 +class AppError extends Error {                                 
+       2 +  constructor(status, code, message) {                         
+       3 +    super(message);                                            
+       4 +    this.status = status;                                      
+       5 +    this.code = code;                                          
+       6 +  }                                                            
+       7 +}                                                              
+       8 +                                                               
+       9 +function notFoundHandler(req, res, next) {                     
+      10 +  next(new AppError(404, 'NOT_FOUND', 'Recurso no encontrado.')
+         +);                                                             
+      11 +}                                                              
+      12 +                                                               
+      13 +// Formato de error del spec §7: { error: { code, message } }  
+      14 +// eslint-disable-next-line no-unused-vars                     
+      15 +function errorHandler(err, req, res, next) {                   
+      16 +  if (err instanceof AppError) {                               
+      17 +    return res.status(err.status).json({ error: { code: err.cod
+         +e, message: err.message } });                                  
+      18 +  }                                                            
+      19 +  if (err.type === 'entity.parse.failed') {                    
+      20 +    return res.status(400).json({                              
+      21 +      error: { code: 'VALIDATION_ERROR', message: 'El cuerpo de
+         + la petición no es JSON válido.' },                            
+      22 +    });                                                        
+      23 +  }                                                            
+      24 +  console.error(err);                                          
+      25 +  return res.status(500).json({                                
+      26 +    error: { code: 'INTERNAL_ERROR', message: 'Error interno de
+         +l servidor.' },                                                
+      27 +  });                                                          
+      28 +}                                                              
+      29 +                                                               
+      30 +module.exports = { AppError, notFoundHandler, errorHandler };  
+  ⎿  … 3 more files changed
+
+⏺ Bash(cd /Users/superdev/Documents/reservas-salas
+      cat > web/package.json <<'EOF'…)
+  ⎿  Created e2e/Dockerfile (+6 -0)
+      1 +FROM mcr.microsoft.com/playwright:v1.65.1-noble                 
+      2 +WORKDIR /e2e                                                    
+      3 +COPY package.json package-lock.json ./                          
+      4 +RUN npm ci                                                      
+      5 +COPY . .                                                        
+      6 +CMD ["npx", "playwright", "test"]                               
+  ⎿  Created e2e/package.json (+12 -0)
+       1 +{                                                              
+       2 +  "name": "reservas-e2e",                                      
+       3 +  "version": "1.0.0",                                          
+       4 +  "private": true,                                             
+       5 +  "type": "commonjs",                                          
+       6 +  "scripts": {                                                 
+       7 +    "test": "playwright test"                                  
+       8 +  },                                                           
+       9 +  "devDependencies": {                                         
+      10 +    "@playwright/test": "1.65.1"                               
+      11 +  }                                                            
+      12 +}                                                              
+  ⎿  Created e2e/playwright.config.js (+12 -0)
+       1 +const { defineConfig, devices } = require('@playwright/test'); 
+       2 +                                                               
+       3 +module.exports = defineConfig({                                
+       4 +  testDir: './tests',                                          
+       5 +  outputDir: 'results/test-results',                           
+       6 +  reporter: 'line',                                            
+       7 +  use: {                                                       
+       8 +    baseURL: process.env.BASE_URL || 'http://web',             
+       9 +    screenshot: 'only-on-failure',                             
+      10 +  },                                                           
+      11 +  projects: [{ name: 'chromium', use: { ...devices['Desktop Chr
+         +ome'] } }],                                                    
+      12 +});                                                            
+  ⎿  Created e2e/tests/smoke.spec.js (+7 -0)
+      1 +const { test, expect } = require('@playwright/test');           
+      2 +                                                                
+      3 +test('la página inicial muestra API: ok', async ({ page }) => { 
+      4 +  await page.goto('/');                                         
+      5 +  await expect(page.getByTestId('api-status')).toHaveText('API: 
+        +ok');                                                           
+      6 +  await page.screenshot({ path: 'results/smoke.png', fullPage: t
+        +rue });                                                         
+      7 +});                                                             
+  ⎿  Created web/Dockerfile (+10 -0)
+       1 +FROM node:22-alpine AS build                                   
+       2 +WORKDIR /app                                                   
+       3 +COPY package.json package-lock.json ./                         
+       4 +RUN npm ci                                                     
+       5 +COPY . .                                                       
+       6 +RUN npm run build                                              
+       7 +                                                               
+       8 +FROM nginx:1.27-alpine                                         
+       9 +COPY nginx.conf /etc/nginx/conf.d/default.conf                 
+      10 +COPY --from=build /app/dist /usr/share/nginx/html              
+  ⎿  … 7 more files changed
+
+⏺ Ahora genero los package-lock.json dentro de un contenedor node:22-alpine.
+
+⏺ Bash(for d in api web e2e; do docker run --rm -v "$PWD/$d":/w -w /w
+      node:22-alpine npm install --package-lock-only --no-audit --no-fund 2>&1 |
+      tail -2; done; ls */pa…)
+  ⎿  Created e2e/package-lock.json (+60 -0)
+       1 +{                                                              
+       2 +  "name": "reservas-e2e",                                      
+       3 +  "version": "1.0.0",                                          
+       4 +  "lockfileVersion": 3,                                        
+       5 +  "requires": true,                                            
+       6 +  "packages": {                                                
+       7 +    "": {                                                      
+       8 +      "name": "reservas-e2e",                                  
+       9 +      "version": "1.0.0",                                      
+      10 +      "devDependencies": {                                     
+      11 +        "@playwright/test": "1.65.1"                           
+      12 +      }                                                        
+      13 +    },                                                         
+      14 +    "node_modules/@playwright/test": {                         
+      15 +      "version": "1.65.1",                                     
+      16 +      "resolved": "https://registry.npmjs.org/@playwright/test/
+         +-/test-1.65.1.tgz",                                            
+      17 +      "integrity": "sha512-y+NCIRm2LvY4slUVWvGh1nujJ8RF/hEisIsq
+         +2mtUPgdQC4L701bq5hZGMhrpeXjACvwvO9tj5dJqhvM6TP9lbw==",         
+      18 +      "dev": true,                                             
+      19 +      "license": "Apache-2.0",                                 
+      20 +      "dependencies": {                                        
+      21 +        "playwright": "1.65.1"                                 
+      22 +      },                                                       
+      23 +      "bin": {                                                 
+      24 +        "playwright": "cli.js"                                 
+      25 +      },                                                       
+      26 +      "engines": {                                             
+      27 +        "node": ">=20"                                         
+      28 +      }                                                        
+      29 +    },                                                         
+      30 +    "node_modules/playwright": {                               
+      31 +      "version": "1.65.1",                                     
+      32 +      "resolved": "https://registry.npmjs.org/playwright/-/play
+         +wright-1.65.1.tgz",                                            
+      33 +      "integrity": "sha512-vJ1FuoOrNwOKHUIVEvSt3jT1L+wjjDpwhwIs
+         +tKtfvTh8XIG4FG4bIFuvNdMxi81LGfAhUgUZleVFaOLY4RIUUw==",         
+      34 +      "dev": true,                                             
+      35 +      "license": "Apache-2.0",                                 
+      36 +      "dependencies": {                                        
+      37 +        "playwright-core": "1.65.1"                            
+      38 +      },                                                       
+      39 +      "bin": {                                                 
+      40 +        "playwright": "cli.js"                                 
+     … 20 more lines (ctrl+o to expand)
+  ⎿  … 2 more files changed
+  ⎿  (timeout 5m)
+
+⏺ Ya están los locks y no quedaron node_modules en el host. Levanto todo desde
+  cero.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ El script npm test que fija el backlog (node --test test/) falla en Node 22,
+  porque no acepta un directorio como argumento. Antes de preguntarte compruebo
+  qué alternativas funcionan.
+
+  Ran 1 shell command (ctrl+o to expand)
+⏺ Mientras decides eso, corro el e2e para no tener la verificación parada.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ La causa: en alpine localhost resuelve primero a ::1 y nginx solo escuchaba en
+  IPv4. Lo corrijo con listen [::]:80; en nginx.conf, así el healthcheck del
+  spec se mantiene literal.
+
+⏺ Update(web/nginx.conf)
+  ⎿  Added 1 line
+      1  server {
+      2    listen 80;
+      3 +  listen [::]:80;                                               
+      4    server_name _;
+      5    root /usr/share/nginx/html;
+      6    index index.html;
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+⏺ Miré la captura: muestra "API: ok" en verde y se lee bien. Compruebo también
+  el criterio 5.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Todo funciona menos un punto que el spec deja contradictorio, y en modo
+  Desarrollo eso te toca decidirlo a ti.
+
+⏺ User answered Claude's questions:
+  ⎿  · El backlog fija el script de la API como `npm test` = `node --test
+     test/`, pero en Node 22 eso falla: toma `test/` como un archivo y da
+     "Cannot find module '/app/test'". Probé dos alternativas que pasan el test
+     de health. ¿Cuál usamos? (La anoto como D-33 y corrijo el backlog.) → Glob
+     porque asi helpers.js nunca corre como test anotalo y corrige el backlog
+
+⏺ Update(docs/00-decisiones.md)
+  ⎿  Added 1 line
+      43  | D-30 | 2026-11-15 | T1 | `test/helpers.js` y la BD `reservas_
+          test` son de T2: ¿contra qué BD corre el test de health en T1? 
+          | En T1 el test usa el pool normal (`DATABASE_URL`, BD `reserva
+          s`); solo hace `SELECT 1` y no toca datos. Desde T2 todos los t
+          ests usan `helpers.js` y `reservas_test` | Es la opción más sim
+          ple que verifica el endpoint real sin adelantar T2 |
+      44  | D-31 | 2026-11-15 | T1 | ¿Hace falta `.dockerignore`? (no est
+          aba en el §5.2) | Sí: `api/`, `web/` y `e2e/` tienen `.dockerig
+          nore` que excluye `node_modules`, `dist`, resultados de e2e, `.
+          env*`, logs y archivos del sistema. Añadido al spec §5.2 | Las 
+          imágenes se construyen solo con lo versionado en el repo, sin a
+          rchivos temporales ni locales; el resultado no depende de la má
+          quina (refuerza D-07) |
+      45  | D-32 | 2026-11-15 | S1 | ¿Qué se hace con el export de la ses
+          ión anterior? | Al iniciar cada sesión (modo Desarrollo), si ha
+          y un export de la sesión anterior fuera de `docs/sesiones/` o s
+          in commitear, el agente lo mueve allí y hace un commit local so
+          lo con él. Regla escrita en `CLAUDE.md` | La memoria del agente
+           es local a la máquina; en `CLAUDE.md` la regla viaja con el re
+          positorio |
+      46 +| D-33 | 2026-11-15 | T1 | El backlog fijaba `npm test` = `node
+         + --test test/`, pero en Node 22 falla (toma `test/` como archiv
+         +o: "Cannot find module '/app/test'") | `npm test` = `node --tes
+         +t "test/**/*.test.js"`. Backlog T1 corregido | El glob explícit
+         +o ejecuta solo los `*.test.js`, así que `test/helpers.js` (T2) 
+         +nunca corre como test; `node --test` sin argumentos sí lo tomar
+         +ía por el patrón por defecto `test/**/*.js` |                  
+
+⏺ Update(docs/02-backlog.md)
+  ⎿  Added 1 line, removed 1 line
+      45  - **Alcance:**
+      46    - `.gitignore`, `docker-compose.yml` con los 4 servicios del 
+          §5.3 (healthchecks, perfil `e2e`).
+      47    - `.dockerignore` en `api/`, `web/` y `e2e/` con el contenido
+           del §5.2 (D-31).
+      48 -  - `api/`: Dockerfile (`node:22-alpine`, `npm ci`, incluye dev
+         -Dependencies para poder ejecutar tests), `package.json` con ver
+         -siones exactas, `src/index.js`, `src/app.js`, `src/db.js`, `src
+         -/errors.js`, `routes/health.js`. Script `npm test` = `node --te
+         -st test/`.                                                     
+      48 +  - `api/`: Dockerfile (`node:22-alpine`, `npm ci`, incluye dev
+         +Dependencies para poder ejecutar tests), `package.json` con ver
+         +siones exactas, `src/index.js`, `src/app.js`, `src/db.js`, `src
+         +/errors.js`, `routes/health.js`. Script `npm test` = `node --te
+         +st "test/**/*.test.js"` (D-33).                                
+      49    - `web/`: Vite + React, `nginx.conf` (SPA fallback a `index.h
+          tml` y proxy `/api/` → `http://api:3000`), Dockerfile multi-sta
+          ge. Página que muestra `API: ok` / `API: error` con `data-testi
+          d="api-status"`.
+      50    - `e2e/`: Dockerfile desde la imagen de Playwright, `playwrig
+          ht.config.js` (baseURL desde `BASE_URL`, solo chromium, reporte
+          r `line`, `outputDir: results/test-results`), `tests/smoke.spec
+          .js` con captura `results/smoke.png`.
+      51    - `api/test/health.test.js` que comprueba 200 en `/api/health
+          `.
+
+⏺ Bash(sed -i '' 's#"test": "node --test test/"#"test": "node --test
+      \\"test/**/*.test.js\\""#' api/package.json && grep '"test"'
+      api/package.json)
+  ⎿  Updated api/package.json (+1 -1)
+       6    "main": "src/index.js",
+       7    "scripts": {
+       8      "start": "node src/index.js",
+       9 -    "test": "node --test test/"                                
+       9 +    "test": "node --test \"test/**/*.test.js\""                
+      10    },
+      11    "dependencies": {
+      12      "express": "5.3.0",
+
+⏺ Anotado como D-33 y backlog corregido. Ahora hago la verificación completa del
+  DoD desde cero.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Los 5 criterios pasan. Hago el registro de cierre.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(docs/tareas/T1-esqueleto.md)
+  ⎿  Wrote 77 lines to docs/tareas/T1-esqueleto.md
+       1 # T1 · Esqueleto: Docker Compose, API health, web y e2e smoke
+       2
+       3 - **Sesión:** S1 · **Fecha:** 2026-11-15 · **Inicio–fin:** ~17:0
+         5–17:21
+       4 - **Agente:** Claude Code + Opus 5.5
+       5 - **Sesión exportada:** `docs/sesiones/S1-t1-esqueleto.txt`
+       6
+       7 ## Qué se pidió
+       8 T1 de `02-backlog.md`: que `docker compose up` desde un clon lim
+         pio levante db, api y web; que la web muestre el estado de la AP
+     … +70 lines (~4 KB) (ctrl+o to expand)
+
+⏺ Bash(cat >> docs/03-bitacora.md <<'EOF'…)
+  ⎿  Updated docs/03-bitacora.md (+7 -0)
+      12  - **16:43** · S0 · Redactados `docs/00-decisiones.md` (25 decis
+          iones, confirmadas y propuestas), `docs/01-spec.md`, `docs/02-b
+          acklog.md` (T1–T5 con DoR/DoD), `CLAUDE.md`, `README.md` con la
+           instrucción única, skill `.claude/skills/verificar-ui`, planti
+          lla de tareas y guía de sesiones. Pendiente: revisión del respo
+          nsable y commit local de S0.
+      13  - **~16:50** · S0 · Revisión del responsable: confirma todas la
+          s decisiones propuestas (incluidas D-09, D-10 y D-24) y pide 2 
+          cambios. (1) `CLAUDE.md` con dos modos: Desarrollo (plan corto 
+          y OK antes de escribir código; si el spec no lo resuelve, el ag
+          ente pregunta y la decisión se escribe antes del código) y Reco
+          nstrucción (solo si la instrucción lo dice: sin preguntas, opci
+          ón más simple, notas solo en `docs/reconstruccion/`). (2) Carre
+          ra en D-13: una reserva creada mientras RRHH desactiva una sala
+           podía quedar activa en una sala inactiva; se pide bloquear la 
+          fila de la sala al desactivar y al reservar, con una prueba.
+      14  - **16:54** · S0 · Cambios aplicados: D-26 (bloqueo `FOR SHARE`
+           al reservar y `FOR UPDATE` al modificar sala; la FK solo toma 
+          `FOR KEY SHARE`, por eso no bastaba) y D-27 (dos modos); spec R
+          12 y nueva §8.1 con el SQL de ambas transacciones y 3 escenario
+          s de prueba (`room-lock.test.js`, detectando la espera con `pg_
+          stat_activity` en vez de esperas fijas); T5 ampliada (estimació
+          n de 25 a 35 min); T3 deja el POST como transacción explícita p
+          ara que T5 solo añada el bloqueo; `CLAUDE.md` reescrito con los
+           dos modos; la instrucción del README activa el modo reconstruc
+          ción; carpeta `docs/reconstruccion/` creada. Commit local de S0
+          .
+      15 +                                                               
+      16 +## S1 · T1 Esqueleto (Claude Code, Opus 5.5)                   
+      17 +                                                               
+      18 +- **~17:05** · S1 · El responsable pide guardar en memoria la r
+         +egla de commitear el export de la sesión anterior; se commitea 
+         +el export de S0 (`fee0cf4`). El agente presenta el plan de T1 c
+         +on 4 dudas (dependencias por tarea, arranque sin migrar en T1, 
+         +BD del test de health, `.dockerignore`).                       
+      19 +- **~17:10** · S1 · OK del responsable al plan. Acepta las duda
+         +s 1–3 como se propusieron y pide `.dockerignore` en api, web y 
+         +e2e, anotado como decisión y en el spec. Pide también que la re
+         +gla del export esté en `CLAUDE.md`, porque la memoria del agent
+         +e es local. Se escriben D-28 a D-32, el spec §5.2, el backlog T
+         +1 y `CLAUDE.md` antes del código.                              
+      20 +- **~17:15** · S1 · Código de T1 escrito; los lockfiles se gene
+         +ran en un contenedor `node:22-alpine`. Primera verificación: `n
+         +pm test` falla (`node --test test/` no acepta directorios en No
+         +de 22) y `web` queda `unhealthy` (`localhost` → `::1`, nginx so
+         +lo en IPv4). Se corrige nginx con `listen [::]:80;`. Sobre el s
+         +cript de test, el responsable elige el glob `test/**/*.test.js`
+         + (D-33, backlog corregido).                                    
+      21 +- **17:21** · S1 · Verificación completa tras `down -v` + `up -
+         +-build`: los 3 servicios `healthy`, health por nginx ok, `npm t
+         +est` 1/1, e2e smoke `1 passed` y captura `smoke.png` revisada (
+         +"API: ok"), `e2e` fuera de `up`. Registro en `docs/tareas/T1-es
+         +queleto.md` y commit local de T1.                              
+
+⏺ T1 está terminada y commiteada (6ffe8b1 T1: esqueleto docker compose, API
+  health, web y e2e smoke, solo local, sin push). Pasan los 5 criterios del
+  backlog, verificados tras docker compose down -v && docker compose up -d
+  --build:
+
+  ┌──────────────────────────────┬──────────────────────────────────────────┐
+  │           Criterio           │                Resultado                 │
+  ├──────────────────────────────┼──────────────────────────────────────────┤
+  │ 1. db, api y web healthy     │ ✅                                       │
+  ├──────────────────────────────┼──────────────────────────────────────────┤
+  │ 2. curl                      │ ✅ {"status":"ok","db":"ok"}             │
+  │ localhost:8080/api/health    │                                          │
+  ├──────────────────────────────┼──────────────────────────────────────────┤
+  │ 3. docker compose exec api   │ ✅ 1 pass, 0 fail                        │
+  │ npm test                     │                                          │
+  ├──────────────────────────────┼──────────────────────────────────────────┤
+  │ 4. e2e smoke                 │ ✅ 1 passed. Miré smoke.png: muestra     │
+  │                              │ "API: ok" en verde y se lee bien         │
+  ├──────────────────────────────┼──────────────────────────────────────────┤
+  │ 5. up sin flags no arranca   │ ✅ solo arrancan db, api y web           │
+  │ e2e                          │                                          │
+  └──────────────────────────────┴──────────────────────────────────────────┘
+
+  Lo que pediste:
+  - Export de sesión: la regla está en CLAUDE.md como paso 0 del modo
+    Desarrollo, y anotada como D-32. Borré la copia de mi memoria local para no
+    tenerla en dos sitios. El export de S0 ya está commiteado (fee0cf4).
+  - .dockerignore: creado en api/, web/ y e2e/, anotado como D-31 y añadido al
+    spec §5.2 y al backlog de T1.
+  - Dudas 1–3: quedan anotadas como D-28, D-29 y D-30, tal como las aceptaste.
+
+  Dos problemas en la primera verificación:
+  1. npm test fallaba con node --test test/, porque Node 22 no acepta un
+     directorio ahí. Lo cambié al glob test/**/*.test.js que elegiste. Está
+     anotado como D-33 y el backlog quedó corregido.
+  2. web no llegaba a healthy: dentro del contenedor, localhost apuntaba a la
+     dirección IPv6 y nginx solo escuchaba en IPv4. Lo arreglé con listen
+     [::]:80; en nginx.conf, sin tocar el healthcheck del spec. Como no cambia
+     nada del spec, no lo anoté como decisión; está en "Problemas y
+     correcciones" del archivo de la tarea.
+
+  El detalle está en T1-esqueleto.md (docs/tareas/T1-esqueleto.md) y en la
+  bitácora (docs/03-bitacora.md).
+
+  Te toca: exporta esta sesión con /export a docs/sesiones/S1-t1-esqueleto.txt,
+  que es el nombre al que ya apunta el archivo de la tarea. Al empezar la sesión
+  de T2 la commitearé, según la nueva regla de CLAUDE.md.
