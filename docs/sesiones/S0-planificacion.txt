@@ -1,0 +1,1136 @@
+
+❯ Te comparto el PDF de una prueba que haremos. quiero que lo analices antes de
+  nada pero todavia no escribas nada de codigo ni crees archivos. para esta
+  prueba quiero un alcance pequeño, talvez unas 5 tareas en 5 o 6 sesiones. Lo
+  esencial para mi es que sea imposible reservar dos veces la misma sala a la
+  misma hora y tambeen si dos personas reservan a la vez, y que se pueda
+  reconstruir solo con la documentación que es lo mas importante de la prueba
+  Hazme solo las preguntas que cambien el diseño y las demas decídelas tu y
+  anotalas como propuesta para que yo las revise. La forma de organizar las
+  sesiones y el tiempo estimado también quedan como una decisión tuya,
+  empecemos
+
+⏺ Análisis de la prueba: reservas de salas
+
+  Antes de nada, revisa la fecha. El PDF da como plazo el lunes 2 de noviembre
+  de 2026 a las 8:00 a. m. y hoy es 15 de noviembre. Si tienes una fecha nueva o
+  es un ensayo, no cambia nada del diseño. Si no lo es, conviene aclararlo con
+  ellos antes de invertir horas.
+
+  Qué evalúan de verdad
+
+  1. La documentación tiene que bastar para reconstruir todo. Van a borrar el
+     código y le darán al agente una sola instrucción, la del README. Por eso el
+     spec no puede ser una lista de deseos. Tiene que incluir el SQL exacto,
+     los contratos de la API con sus códigos de error y las versiones fijas.
+     Cada ambigüedad es un punto donde el agente puede improvisar distinto.
+  2. El registro del proceso. Cuentan las decisiones con su porqué, la bitácora
+     con hora, un archivo por tarea y las sesiones exportadas.
+  3. La DoD es mínima. Pide docker compose up sin pasos manuales, /docs/tareas
+     completo y el README. Lo demás lo pones tú.
+
+  La decisión central: cómo garantizar "sin choques"
+
+  Este es el punto que más pesa, y la solución tiene que estar en la base de
+  datos, no en el código de la aplicación.
+
+  - Si la API primero comprueba que el hueco esté libre y después inserta, dos
+    peticiones simultáneas pueden pasar las dos la comprobación antes de que
+    ninguna inserte. Eso es justo lo que pasa hoy con el Excel.
+  - Propuesta: PostgreSQL con una restricción de exclusión:
+  EXCLUDE USING gist (room_id WITH =, tstzrange(starts_at, ends_at, '[)') WITH
+  &&)
+  WHERE (status = 'active')
+    - Es atómica. Con 2 o con 50 peticiones simultáneas, Postgres deja entrar
+      solo una y las demás fallan con el código 23P01, que la API traduce a 409
+      Conflict.
+    - El rango [) permite reservas seguidas: una de 10:00 a 11:00 y otra de
+      11:00 a 12:00 no chocan.
+    - El WHERE status='active' hace que una reserva cancelada libere el hueco
+      sin borrarla.
+  - Cómo se demuestra: un test que lanza unas 20 peticiones iguales a la vez.
+    Debe dar exactamente un 201 y diecinueve 409. Ese resultado es la evidencia
+    principal del cierre.
+
+  Por esto la base de datos que propongo es PostgreSQL. SQLite o MySQL no tienen
+  restricciones de exclusión por rangos y obligarían a usar bloqueos en la
+  aplicación, que son más frágiles y más difíciles de explicar.
+
+  Decisiones que tomo yo (propuestas para que las revises)
+
+  Tema: Roles
+  Propuesta: empleado y admin (RRHH)
+  Por qué: El cliente solo menciona a RRHH como administrador
+  ────────────────────────────────────────
+  Tema: Admin
+  Propuesta: Crea, edita y desactiva salas; cancela cualquier reserva
+  Por qué: "Administra las salas"
+  ────────────────────────────────────────
+  Tema: Empleado
+  Propuesta: Ve la disponibilidad, reserva y cancela solo sus propias reservas
+  Por qué: Lo mínimo que resuelve el problema
+  ────────────────────────────────────────
+  Tema: Editar una reserva
+  Propuesta: Fuera del MVP: se cancela y se crea otra
+  Por qué: Menos superficie; la restricción cubre igual cualquier caso
+  ────────────────────────────────────────
+  Tema: Recurrencia
+  Propuesta: Fuera del MVP
+  Por qué: Es la mayor fuente de complejidad; se anota como siguiente paso
+  ────────────────────────────────────────
+  Tema: Granularidad
+  Propuesta: Rangos libres en múltiplos de 15 min, de 15 min a 4 h
+  Por qué: Flexible, y la restricción funciona con cualquier rango
+  ────────────────────────────────────────
+  Tema: Horario
+  Propuesta: Lunes a viernes, de 08:00 a 20:00, sin reservas en el pasado, hasta
+
+    30 días por delante
+  Por qué: Evita que alguien acapare salas y datos absurdos
+  ────────────────────────────────────────
+  Tema: Zona horaria
+  Propuesta: Se guarda en UTC; una sola zona configurable por variable de
+  entorno
+  Por qué: Una sola oficina
+  ────────────────────────────────────────
+  Tema: Usuarios
+  Propuesta: Se crean al arrancar (1 admin y varios empleados); sin registro
+  Por qué: Es una aplicación interna; gestionar usuarios no es el problema que
+    hay que resolver
+  ────────────────────────────────────────
+  Tema: Salas
+  Propuesta: Se crean al arrancar las 5 salas (nombre, capacidad, activa)
+  Por qué: Funciona desde el primer up
+  ────────────────────────────────────────
+  Tema: Stack de la API
+  Propuesta: Node 22, Express y pg con SQL escrito a mano, sin ORM
+  Por qué: La restricción ya exige SQL a mano; un ORM es una variable más que el
+
+    agente puede interpretar distinto al reconstruir
+  ────────────────────────────────────────
+  Tema: Migraciones
+  Propuesta: Archivos .sql numerados que la API ejecuta al arrancar
+  Por qué: Cumple "sin pasos manuales"
+  ────────────────────────────────────────
+  Tema: Frontend
+  Propuesta: React con Vite, compilado y servido por nginx, que reenvía /api a
+  la
+    API
+  Por qué: Un solo puerto y sin CORS
+  ────────────────────────────────────────
+  Tema: Docker
+  Propuesta: postgres:16, node:22-alpine, nginx:alpine, con versiones fijas y
+    healthchecks
+  Por qué: Que la reconstrucción sea reproducible
+  ────────────────────────────────────────
+  Tema: Tests
+  Propuesta: node:test y supertest contra el Postgres real del compose
+  Por qué: El test de concurrencia solo tiene sentido contra la base real
+  ────────────────────────────────────────
+  Tema: Pantallas
+  Propuesta: Login; agenda del día (salas en columnas y horas en filas) con
+    creación de reserva; "Mis reservas"; administración de salas
+  Por qué: Lo mínimo para usar la aplicación sin el Excel
+  ────────────────────────────────────────
+  Tema: Idioma
+  Propuesta: Documentación e interfaz en español; código en inglés
+  Por qué: Lo habitual
+
+  Backlog propuesto (5 tareas)
+
+  1. T1. Esqueleto e infraestructura. Compose con db, api y web, healthchecks,
+     un endpoint /api/health y una página React que lo consulta. Se termina
+     cuando docker compose up desde cero muestra "OK".
+  2. T2. Datos y autenticación. Migraciones (usuarios, salas, reservas con la
+     restricción), datos iniciales, login con JWT y middleware de roles.
+  3. T3. API de reservas. Crear, listar por día y sala, y cancelar, con las
+     reglas de negocio, la traducción de 23P01 a 409 y el test de concurrencia.
+  4. T4. Frontend para empleados. Login, agenda del día, crear reserva (con
+     mensaje claro si hay 409) y "Mis reservas".
+  5. T5. Administración de RRHH y cierre técnico. CRUD de salas, cancelar
+     cualquier reserva y verificación del README desde un clon limpio.
+
+  Organización de las sesiones (unas 3 horas en total)
+
+  Sesión: S0
+  Contenido: Planificación contigo: el agente redacta 00-decisiones, 01-spec,
+    02-backlog, CLAUDE.md y el README; tú revisas y apruebas
+  Tiempo: 45–60 min
+  ────────────────────────────────────────
+  Sesión: S1–S5
+  Contenido: Una tarea por sesión. Al terminar cada una: documento en
+    docs/tareas/, entrada en la bitácora y /export
+  Tiempo: 15–25 min cada una
+  ────────────────────────────────────────
+  Sesión: S6
+  Contenido: Ensayo de reconstrucción: se copian solo los documentos a una
+    carpeta vacía, se ejecuta la instrucción del README en una sesión nueva y se
+
+    comprueba que docker compose up funciona. Después se redacta 04-cierre
+  Tiempo: 30 min
+
+  Una tarea por sesión deja cada exportación limpia y fácil de enlazar desde su
+  archivo de tarea. Mi recomendación más fuerte es la S6: es exactamente lo que
+  ellos van a hacer, y si algo falla, lo descubres tú primero y lo corriges en
+  la documentación (y eso queda registrado en el cierre como "qué falló en el
+  plan").
+
+  La instrucción única del README sería algo como: "Lee CLAUDE.md y ejecuta las
+  tareas de docs/02-backlog.md en orden, sin saltarte su DoD." El CLAUDE.md
+  obliga a seguir el spec al pie de la letra y a no añadir funciones que no
+  estén en él.
+
+  Preguntas que sí cambian el diseño
+
+  1. Autenticación: ¿usamos login real con correo y contraseña (usuarios creados
+     al arrancar y JWT) o un selector de "entrar como…" sin contraseña?
+     Recomiendo el login real: sin identidad no tiene sentido "cancelar solo lo
+     mío" ni el rol de admin. Con el selector desaparece una parte de T2.
+  2. Papel de RRHH: ¿solo administra salas (mi propuesta) o también tiene que
+     aprobar las reservas? Si las aprueba, aparece un flujo de estados
+     (pendiente, aprobada, rechazada) y hay que decidir si una reserva pendiente
+     ya bloquea la sala. Cambia el modelo y la restricción.
+  3. Zona horaria: ¿en qué ciudad está la oficina? Solo es el valor por defecto,
+     pero el spec debe llevar uno concreto para que la reconstrucción sea
+     determinista.
+
+  Respóndeme estas tres y comenta lo que quieras cambiar de la tabla. Después
+  pasamos a la S0 y redactamos los documentos.
+
+❯ La fecha de entrega ignorala al igual que los correos dentro. con respecto al
+  login debe ser con correo y contraseña. RRHH debe solo administrar salas
+  pero no aprueba reservas. La zona horaria de la oficina esta en Tegucigalpa,
+  America/Tegucigalpa. La tabla me parece bien pero yo haria estos cambios:
+  1.La S6 es solo el cierre. El ensayo de reconstrucción lo hara el equipo de
+  revicion asi que no lo pongas en las sesiones. 2.Que el seed deje una reserva
+  el proximo dia habil, por ejemplo Sala 1 de 10:00 a 11:00, para probar el
+  choque rapido desde la interfaz. 3.La interfaz la quiero verificar con una
+  skill del repo que use playwrigth pero verifiquemos si se puede usar dentro
+  de Docker, así funciona en cualquier maquina. Decide tu en que tarea entra
+  porque no todas requieren revisar la interfaz y por ultimo en CLAUDE.md, que
+  nunca haga push, solo commits locales el push lo dejaremos para el final o
+  cuando yo te lo indique. con eso claro pasa a la S0.
+
+⏺ Empiezo la S0. Primero reviso qué hay en la carpeta y si Docker y Playwright
+  están disponibles, para comprobar el punto 3 antes de dejarlo escrito en la
+  documentación.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ La carpeta solo tiene un .git, y la última versión de Playwright es la 1.65.1.
+  Ahora compruebo que la imagen oficial de Playwright abre una página servida
+  desde otro contenedor, como hará el proyecto. · summary
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Playwright ya corre en Docker: la imagen oficial abrió una página de nginx en
+  la misma red y guardó la captura. Ahora consulto las versiones actuales de las
+  dependencias para fijarlas en el spec. · summary
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Ya tengo todo verificado. Ahora escribo los documentos de la S0: decisiones,
+  spec, backlog, CLAUDE.md, README, la skill de verificación de interfaz y la
+  bitácora.
+
+⏺ Write(docs/01-spec.md)
+  ⎿  Wrote 328 lines to docs/01-spec.md
+       1 # 01 · Spec — Reservas de salas de reunión
+       2
+       3 > Fuente de verdad del producto. Si algo no está aquí, no se con
+         struye.
+       4 > Cada decisión remite a `00-decisiones.md` (D-xx) con su porqué
+         .
+       5
+       6 ## 1. Problema
+       7
+       8 > "Somos unas 80 personas y tenemos 5 salas de reunión. Las rese
+     … +321 lines (~19 KB) (ctrl+o to expand)
+
+⏺ Write(docs/00-decisiones.md)
+  ⎿  Wrote 35 lines to docs/00-decisiones.md
+      1 # 00 · Decisiones
+      2
+      3 Cada duda encontrada, qué se decidió y por qué. Estado: **Confirm
+        ada** (la validó el responsable) o **Propuesta** (la tomó el agen
+        te; queda para revisión). Las decisiones nuevas durante la ejecuc
+        ión se añaden al final con su fecha.
+      4
+      5 | ID | Duda | Decisión | Por qué | Estado |
+      6 |---|---|---|---|---|
+      7 | D-01 | ¿Cómo se identifica a la gente? | Login con correo y con
+     … +29 lines (~6 KB) (ctrl+o to expand)
+
+⏺ Write(docs/02-backlog.md)
+  ⎿  Wrote 140 lines to docs/02-backlog.md
+       1 # 02 · Backlog
+       2
+       3 Tareas **en orden de ejecución**. Una tarea por sesión. No se em
+         pieza una tarea si la anterior no cumple su DoD.
+       4
+       5 ## Definition of Ready (DoR) — una tarea está lista si tiene
+       6
+       7 1. **Objetivo** en una frase.
+       8 2. **Dependencias** cumplidas.
+       9 3. **Referencias al spec** (secciones exactas): nada se inventa
+     … +132 lines (~10 KB) (ctrl+o to expand)
+
+⏺ Write(CLAUDE.md)
+  ⎿  Wrote 42 lines to CLAUDE.md
+      1 # CLAUDE.md — Reglas para el agente
+      2
+      3 Proyecto: aplicación interna de reservas de salas de reunión (80
+        personas, 5 salas, RRHH administra). Node.js + React + PostgreSQL
+        , todo con `docker compose up`.
+      4
+      5 ## Lee siempre primero
+      6
+      7 1. `docs/01-spec.md`: **fuente de verdad**. No construyas nada qu
+        e no esté ahí.
+     … +35 lines (ctrl+o to expand)
+
+⏺ Write(README.md)
+  ⎿  Wrote 73 lines to README.md
+      1 # Reservas de salas
+      2
+      3 Aplicación interna para reservar las salas de reunión **sin choqu
+        es**: es imposible que dos reservas activas de la misma sala se s
+        olapen, incluso si dos personas reservan en el mismo instante. La
+         garantía la da PostgreSQL con una restricción de exclusión (ver
+        `docs/01-spec.md` §8).
+      4
+      5 Stack: Node.js 22 + Express · React 19 + Vite · PostgreSQL 16 · n
+        ginx · Playwright (en Docker).
+     … +68 lines (ctrl+o to expand)
+
+⏺ Write(.claude/skills/verificar-ui/SKILL.md)
+  ⎿  Wrote 43 lines to .claude/skills/verificar-ui/SKILL.md
+       1 ---
+       2 name: verificar-ui
+       3 description: Verifica la interfaz web de reservas de salas ejecu
+         tando Playwright dentro de Docker (servicio e2e del compose) y r
+         evisando las capturas. Usar al cerrar tareas que tocan la UI (T1
+         , T4, T5), cuando se pida "verifica la interfaz", "corre los e2e
+         " o "revisa la UI".
+       4 ---
+       5
+       6 # Verificar la interfaz con Playwright en Docker
+     … +37 lines (ctrl+o to expand)
+
+⏺ Write(docs/tareas/_plantilla.md)
+  ⎿  Wrote 38 lines to docs/tareas/_plantilla.md
+       1 # TX · <Nombre de la tarea>
+       2
+       3 - **Sesión:** SX · **Fecha:** AAAA-MM-DD · **Inicio–fin:** HH:MM
+         –HH:MM
+       4 - **Agente:** <Claude Code / Codex + modelo>
+       5 - **Sesión exportada:** `docs/sesiones/SX-<nombre>.txt`
+       6
+       7 ## Qué se pidió
+       8 Resumen del objetivo y referencia a la tarea en `02-backlog.md`.
+       9
+     … +29 lines (ctrl+o to expand)
+
+⏺ Write(docs/sesiones/README.md)
+  ⎿  Wrote 13 lines to docs/sesiones/README.md
+       1 # Sesiones del agente
+       2
+       3 Al final de cada sesión de Claude Code se ejecuta `/export` y se
+          guarda aquí con el nombre:
+       4
+       5 | Sesión | Archivo |
+       6 |---|---|
+       7 | S0 · Análisis y planificación | `S0-planificacion.txt` |
+       8 | S1 · T1 Esqueleto | `S1-T1-esqueleto.txt` |
+       9 | S2 · T2 Datos y auth | `S2-T2-datos-auth.txt` |
+     … +4 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(docs/03-bitacora.md)
+  ⎿  Wrote 12 lines to docs/03-bitacora.md
+      1 # 03 · Bitácora
+      2
+      3 Registro con hora (America/Tegucigalpa) de todo lo ocurrido. Solo
+         se añaden entradas, nunca se reescriben. Formato: `AAAA-MM-DD HH
+        :MM · Sesión · Qué pasó`.
+      4
+      5 ## S0 · Análisis y planificación (Claude Code, Opus 5.5)
+      6
+      7 - **2026-11-15 ~16:27** · S0 · Se crea la carpeta del repositorio
+         (vacía, con `git init`). Se comparte el PDF de la prueba con el
+     … +6 lines (~2 KB) (ctrl+o to expand)
+
+⏺ Write(docs/04-cierre.md)
+  ⎿  Wrote 19 lines to docs/04-cierre.md
+       1 # 04 · Cierre
+       2
+       3 > Se completa en la sesión S6.
+       4
+       5 ## DoD de la prueba
+       6
+       7 | Requisito | Estado | Evidencia |
+       8 |---|---|---|
+       9 | `docker compose up` levanta base de datos, API y frontend desd
+         e un repositorio recién clonado, sin pasos manuales | ☐ | |
+     … +10 lines (ctrl+o to expand)
+
+⏺ Terminé los documentos de la S0. No hay nada de código y todavía no hice
+  commit, porque quiero que revises primero las decisiones marcadas como
+  propuestas.
+
+  Playwright dentro de Docker funciona. Lo probé con la imagen oficial
+  mcr.microsoft.com/playwright:v1.65.1-noble en una prueba aparte, contra un
+  nginx levantado en otro contenedor de la misma red. El test pasó y la captura
+  quedó en la carpeta montada. En el proyecto será el servicio e2e, que no
+  arranca con docker compose up; se lanza con docker compose --profile e2e run
+  --rm --build e2e.
+
+  Archivos creados:
+  - CLAUDE.md: reglas del agente. La garantía contra choques vive solo en
+    PostgreSQL, se hace una tarea cada vez y en orden, y se usan las versiones
+    exactas del spec. Solo commits locales, uno por tarea; nunca push sin que lo
+    pidas.
+  - README.md: cómo levantar y probar, los usuarios de prueba, "probar el choque
+    en 30 segundos" y la instrucción única para el agente.
+  - docs/01-spec.md: reglas R1 a R13, el SQL literal con la restricción EXCLUDE,
+    los contratos de la API con los códigos de error, las pantallas con sus
+    data-testid y el test de concurrencia (20 peticiones simultáneas: 1 debe dar
+    201 y 19 deben dar 409).
+  - docs/02-backlog.md: T1 a T5, cada una con su DoR, sus criterios verificables
+    y sus comandos.
+  - docs/00-decisiones.md: 25 decisiones, cada una marcada como Confirmada o
+    Propuesta.
+  - docs/03-bitacora.md: lo ocurrido en la S0. Las horas de los dos primeros
+    mensajes son aproximadas.
+  - .claude/skills/verificar-ui/SKILL.md, la plantilla de tareas, la guía de
+    sesiones y el esqueleto de 04-cierre.md.
+
+  Dónde entra la verificación de interfaz: en T1 se monta la infraestructura de
+  Playwright con un test básico de humo, para quitar el riesgo desde el
+  principio. La skill completa se usa en T4 y T5. T2 y T3 son solo de API y se
+  verifican con sus tests.
+
+  Lo que más conviene que revises en las propuestas:
+  - D-10: reservas en bloques de 15 minutos, de 15 minutos a 4 horas, de lunes a
+    viernes de 08:00 a 20:00, y como máximo 30 días por adelantado.
+  - D-13: desactivar una sala cancela automáticamente sus reservas futuras.
+  - D-24: todos ven el título y el dueño de todas las reservas.
+  - D-09: la API recibe la hora local, no UTC.
+
+  Siguientes pasos:
+  1. Revisa las propuestas y dime qué cambias.
+  2. Hago el commit local de la S0.
+  3. Exporta esta sesión con /export como docs/sesiones/S0-planificacion.txt.
+  4. Abre una sesión nueva para la T1.
+
+❯ Revise todo y me parece bien pero tengo 3 observaciones antes del commit:
+  1.en CLAUDE.md separa dos modos: deesarrollo, que es el normal donde esta el
+  plan corto y mi OK antes de escribir codigo, y si el spec no resuelve algo me
+  preguntas y la decision se escribe antes del codigo, ahora ya cuando el
+  equipo de revision pruebe la reconstruccion, solo si la instruccion lo dice,
+  entonces tu no preguntas solo eliges lo mas simple y escribes tus notas solo
+  en docs/reconstruccion/ 2.D-13 me parece bien pero si alguien reserva justo
+  mientras RRHH desactiva la sala, la reserva puede quedar activa en una sala
+  inactiva, para solucionarlo que desactivar bloquee la fila de la sala y que
+  crear una reserva tambien la bloquee y que haya una prueba de eso, esto
+  dejalo en el spec y en T5. y porr ultimo 3.D-09, D-10 y D-24 confirmadas al
+  igual las demas propuestas. ahora si puedes hacer el commit.
+
+⏺ Aplico los tres cambios y después hago el commit.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Update(docs/00-decisiones.md)
+  ⎿  Added 1 line, removed 1 line
+      1  # 00 · Decisiones
+      2  
+      3 -Cada duda encontrada, qué se decidió y por qué. Estado: **Confir
+        -mada** (la validó el responsable) o **Propuesta** (la tomó el ag
+        -ente; queda para revisión). Las decisiones nuevas durante la eje
+        -cución se añaden al final con su fecha.                         
+      3 +Cada duda encontrada, qué se decidió y por qué. Estado: **Confir
+        +mada** (la validó el responsable) o **Propuesta** (la tomó el ag
+        +ente; queda para revisión). Todas las decisiones de S0 fueron re
+        +visadas y confirmadas por el responsable el 2026-11-15. Las deci
+        +siones nuevas durante la ejecución se añaden al final con su fec
+        +ha.                                                             
+      4  
+      5  | ID | Duda | Decisión | Por qué | Estado |
+      6  |---|---|---|---|---|
+⏺ Update(docs/00-decisiones.md)
+  ⎿  Added 2 lines
+      28  | D-22 | Organización del trabajo | S0 planificación; S1–S5 una
+           tarea por sesión; S6 cierre. El ensayo de reconstrucción lo ha
+          ce el equipo revisor | Una sesión por tarea deja cada exportaci
+          ón aislada y enlazable desde su archivo de tarea | Confirmada |
+      29  | D-23 | Idioma | Documentación, mensajes de error e interfaz e
+          n español; código e identificadores en inglés | Usuarios hispan
+          ohablantes; convención habitual en código | Confirmada |
+      30  | D-24 | Visibilidad de reservas ajenas | Todos ven en la agend
+          a el título y el dueño de todas las reservas | Saber quién tien
+          e la sala es justo lo que el Excel daba; sin esto la gente preg
+          unta por fuera | Confirmada |
+      31 +| D-26 | Carrera entre "desactivar sala" y "crear reserva" (det
+         +ectada en la revisión de D-13) | Crear reserva corre en una tra
+         +nsacción que primero bloquea la fila de la sala con `SELECT ...
+         + FOR SHARE` y comprueba `is_active`; desactivar bloquea la mism
+         +a fila con `SELECT ... FOR UPDATE` antes de cambiarla y cancela
+         +r las futuras. Prueba dedicada en T5 | Sin bloqueo, una reserva
+         + que se inserta mientras RRHH desactiva queda activa en una sal
+         +a inactiva: la FK solo toma `FOR KEY SHARE`, que no choca con u
+         +n UPDATE de `is_active`. `FOR SHARE` vs `FOR UPDATE` serializa 
+         +ambas operaciones, y `FOR SHARE` deja que varias reservas de la
+         + misma sala sigan en paralelo (el choque entre ellas lo resuelv
+         +e D-05) | Confirmada |                                         
+      32 +| D-27 | ¿Cómo trabaja el agente en el desarrollo y en la recon
+         +strucción del equipo revisor? | Dos modos en `CLAUDE.md`. **Des
+         +arrollo** (por defecto): plan corto y OK del responsable antes 
+         +de escribir código; si el spec no resuelve algo, el agente preg
+         +unta y la decisión se escribe en `00-decisiones.md` antes del c
+         +ódigo. **Reconstrucción** (solo si la instrucción lo dice): no 
+         +pregunta, elige lo más simple que cumpla el spec y escribe sus 
+         +notas solo en `docs/reconstruccion/` | En desarrollo el respons
+         +able debe controlar cada decisión. En la reconstrucción no hay 
+         +nadie a quien preguntar, y el registro original (tareas, bitáco
+         +ra, decisiones) debe quedar intacto como evidencia | Confirmada
+         + |                                                             
+      33  | D-25 | Archivos creados por el contenedor e2e en Linux | Las 
+          capturas en `e2e/results` pueden quedar con dueño root en Linux
+           (en macOS/Windows no). Se acepta | Solo afecta a la carpeta de
+           resultados, ignorada por git | Confirmada |
+      34  
+      35  ## Decisiones durante la ejecución
+
+⏺ Update(docs/00-decisiones.md)
+  ⎿  Added 1 line, removed 1 line
+      16  | D-10 | Granularidad y límites | Múltiplos de 15 min, 15–240 m
+          in, L–V 08:00–20:00, nada en el pasado, máximo 30 días adelante
+           | Datos limpios para la agenda, evita acaparar salas; los núme
+          ros son fáciles de ajustar si el cliente lo pide | Confirmada |
+      17  | D-11 | ¿Dónde guarda el token el frontend? | `localStorage`, 
+          JWT de 8 h | App interna, sin despliegue público; cookies httpO
+          nly requieren CSRF y más configuración. Riesgo XSS aceptado y a
+          notado | Confirmada |
+      18  | D-12 | ¿Se pueden editar reservas? | No en el MVP: se cancela
+           y se crea otra | Menos superficie; la restricción protegería i
+          gual un UPDATE, pero no aporta al problema central | Confirmada
+           |
+      19 -| D-13 | ¿Qué pasa al desactivar una sala con reservas futuras?
+         - | Se cancelan en la misma transacción y se informa cuántas; la
+         -s salas nunca se borran | Evita reservas "fantasma" en salas in
+         -existentes y conserva el histórico | Confirmada |              
+      19 +| D-13 | ¿Qué pasa al desactivar una sala con reservas futuras?
+         + | Se cancelan en la misma transacción y se informa cuántas; la
+         +s salas nunca se borran. La carrera con reservas simultáneas se
+         + resuelve en D-26 | Evita reservas "fantasma" en salas inexiste
+         +ntes y conserva el histórico | Confirmada |                    
+      20  | D-14 | Datos para probar rápido | Seed con 1 admin, 3 emplead
+          os, 5 salas y una reserva demo: Sala 1, próximo día hábil, 10:0
+          0–11:00 (Ana) | Permite reproducir el choque desde la interfaz 
+          en segundos entrando como Luis | Confirmada |
+      21  | D-15 | ¿Cómo se verifica la interfaz? | Playwright **dentro d
+          e Docker** (imagen oficial `mcr.microsoft.com/playwright:v1.65.
+          1-noble`) como servicio `e2e` con perfil, más una skill del rep
+          o (`.claude/skills/verificar-ui`) | Funciona en cualquier máqui
+          na sin instalar navegadores. **Verificado en S0**: la imagen ab
+          rió una página de nginx en otro contenedor de la misma red y gu
+          ardó la captura en un volumen montado. El perfil evita que arra
+          nque con `docker compose up` | Confirmada |
+      22  | D-16 | ¿En qué tareas se verifica la interfaz? | Infraestruct
+          ura e2e + smoke en **T1**; skill completa en **T4** y **T5**. T
+          2 y T3 son solo API y se verifican con tests de API | Montar Pl
+          aywright en T1 elimina el riesgo pronto; no tiene sentido verif
+          icar interfaz en tareas que no la tocan | Confirmada |
+  ⎿  1 skill available
+
+⏺ Las filas D-26 y D-27 quedaron antes de D-25. Corrijo el orden.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Ahora actualizo el spec (R12, el endpoint PATCH y una nueva sección §8.1) y la
+  T5.
+
+⏺ Update(docs/01-spec.md)
+  ⎿  Added 1 line, removed 1 line
+      53  | R9 | Solo el dueño o un admin pueden cancelar una reserva | A
+          PI | 403 `FORBIDDEN` |
+      54  | R10 | Solo se cancelan reservas activas cuyo inicio aún no ha
+           llegado | API | 409 `BOOKING_NOT_CANCELLABLE` |
+      55  | R11 | Cancelar no borra: cambia `status` a `cancelled` y libe
+          ra el horario (la restricción solo aplica a `active`) | BD + AP
+          I | — |
+      56 -| R12 | Desactivar una sala cancela en la misma transacción sus
+         - reservas activas futuras; no se borran salas | API (transacció
+         -n) | — |                                                       
+      56 +| R12 | Desactivar una sala cancela en la misma transacción sus
+         + reservas activas futuras; no se borran salas. Nunca puede qued
+         +ar una reserva activa futura en una sala inactiva, ni siquiera 
+         +si alguien reserva mientras RRHH desactiva (bloqueo de fila, §8
+         +.1) | API (transacción + bloqueo de fila) | — |                
+      57  | R13 | Nombre de sala único | UNIQUE en BD | 409 `ROOM_NAME_TA
+          KEN` |
+      58  
+      59  **Orden de validación al crear reserva:** 400 (formato) → 404/4
+          22 sala → 422 reglas R2–R6 → INSERT (la BD decide R1 → 409).
+
+⏺ Update(docs/01-spec.md)
+  ⎿  Added 1 line
+      58  
+      59  **Orden de validación al crear reserva:** 400 (formato) → 404/4
+          22 sala → 422 reglas R2–R6 → INSERT (la BD decide R1 → 409).
+      60  No se hace "SELECT para ver si está libre" antes del INSERT com
+          o garantía: la garantía es la restricción (D-05). Ese tipo de c
+          omprobación previa está **prohibida** porque introduce la falsa
+           sensación de control y una condición de carrera.
+      61 +El único SELECT previo permitido es el bloqueo de la **fila de 
+         +la sala** (`FOR SHARE`, §8.1), que garantiza R7/R12 (sala activ
+         +a), no R1.                                                     
+      62  
+      63  ## 5. Arquitectura
+      64  
+
+⏺ Update(docs/01-spec.md)
+  ⎿  Added 1 line, removed 1 line
+      270  | `GET /api/auth/me` | auth | — | 200 `User` | 401 |
+      271  | `GET /api/rooms` | auth | query `includeInactive=true` (solo
+            admin; ignorado para employee) | 200 `Room[]` ordenadas por `
+           name` | 401 |
+      272  | `POST /api/rooms` | admin | `{ name, capacity, location? }` 
+           | 201 `Room` | 400, 401, 403, 409 `ROOM_NAME_TAKEN` |
+      273 -| `PATCH /api/rooms/:id` | admin | cualquiera de `{ name, capa
+          -city, location, isActive }` | 200 `{ room: Room, cancelledBook
+          -ings: number }` | 400, 401, 403, 404, 409 |                   
+      273 +| `PATCH /api/rooms/:id` | admin | cualquiera de `{ name, capa
+          +city, location, isActive }` | 200 `{ room: Room, cancelledBook
+          +ings: number }` (transacción con `FOR UPDATE` de la sala, §8.1
+          +) | 400, 401, 403, 404, 409 |                                 
+      274  | `GET /api/bookings?date=YYYY-MM-DD` | auth | `date` obligato
+           rio | 200 `Booking[]` activas de ese día local (todas las sala
+           s), orden `startsAt` | 400, 401 |
+      275  | `GET /api/bookings/mine` | auth | — | 200 `Booking[]` activa
+           s del usuario con `endsAt > now`, orden `startsAt` | 401 |
+      276  | `POST /api/bookings` | auth | `{ roomId, date: "YYYY-MM-DD",
+            startTime: "HH:mm", endTime: "HH:mm", title }` (hora local) |
+            201 `Booking` | 400, 401, 404, 409 `BOOKING_CONFLICT`, 422 |
+
+⏺ Update(docs/01-spec.md)
+  ⎿  Added 35 lines
+      290  - **Test obligatorio** (`api/test/concurrency.test.js`): lanza
+           r con `Promise.all` **20** `POST /api/bookings` idénticos (mis
+           mo usuario, sala y horario) contra la BD real → exactamente 1 
+           respuesta 201, 19 respuestas 409 `BOOKING_CONFLICT`, y `SELECT
+            count(*)` de reservas activas de ese horario = 1. Segundo cas
+           o: 20 peticiones de **distintos horarios solapados parcialment
+           e** (p. ej. inicios escalonados de 15 min con 60 min de duraci
+           ón) → en BD no existe ningún par solapado (verificado con un s
+           elf-join).
+      291  - El pool de `pg` debe tener al menos 10 conexiones para que l
+           a concurrencia sea real.
+      292  
+      293 +### 8.1 Carrera "desactivar sala" vs "crear reserva" (R12, D-2
+          +6)                                                            
+      294 +                                                              
+      295 +**Problema:** sin bloqueo, una reserva puede validar `is_activ
+          +e = true`, RRHH desactiva la sala y cancela las reservas futur
+          +as **que ya ve**, y después se confirma la reserva nueva: qued
+          +a activa en una sala inactiva. La FK de `bookings.room_id` no 
+          +lo evita, porque solo toma `FOR KEY SHARE`, que no choca con u
+          +n `UPDATE` de `is_active`.                                    
+      296 +                                                              
+      297 +**Solución:** ambas operaciones bloquean la misma fila de `roo
+          +ms` con modos incompatibles.                                  
+      298 +                                                              
+      299 +*Crear reserva* (`POST /api/bookings`), una transacción en `RE
+          +AD COMMITTED`:                                                
+      300 +```sql                                                        
+      301 +BEGIN;                                                        
+      302 +SELECT id, is_active FROM rooms WHERE id = $roomId FOR SHARE; 
+          +  -- no existe → 404; is_active = false → 422 ROOM_INACTIVE (R
+          +OLLBACK)                                                      
+      303 +INSERT INTO bookings (...) VALUES (...) RETURNING *;          
+          +  -- 23P01 → 409 BOOKING_CONFLICT (ROLLBACK)                  
+      304 +COMMIT;                                                       
+      305 +```                                                           
+      306 +                                                              
+      307 +*Desactivar sala* (`PATCH /api/rooms/:id` con `isActive: false
+          +`), una transacción:                                          
+      308 +```sql                                                        
+      309 +BEGIN;                                                        
+      310 +SELECT id FROM rooms WHERE id = $id FOR UPDATE;               
+          +  -- no existe → 404                                          
+      311 +UPDATE rooms SET is_active = false, ... WHERE id = $id;       
+      312 +UPDATE bookings SET status = 'cancelled', cancelled_at = now()
+          +, cancelled_by = $adminId                                     
+      313 + WHERE room_id = $id AND status = 'active' AND starts_at > now
+          +();   -- rowCount = cancelledBookings                         
+      314 +COMMIT;                                                       
+      315 +```                                                           
+      316 +(Cualquier `PATCH` de sala usa el `FOR UPDATE`, aunque solo ca
+          +mbie el nombre: un único camino de código.)                   
+      317 +                                                              
+      318 +**Por qué funciona:**                                         
+      319 +- `FOR SHARE` y `FOR UPDATE` son incompatibles. Si la reserva 
+          +bloqueó primero, la desactivación espera a que la reserva term
+          +ine y después la ve y la cancela. Si la desactivación bloqueó 
+          +primero, la reserva espera y, al continuar, PostgreSQL le devu
+          +elve la versión ya confirmada de la fila (`is_active = false`)
+          +, así que responde 422 `ROOM_INACTIVE`.                       
+      320 +- `FOR SHARE` es compatible consigo mismo: varias reservas de 
+          +la misma sala siguen en paralelo, y el choque entre ellas lo r
+          +esuelve la restricción (§8).                                  
+      321 +- El orden de bloqueo es siempre "sala primero", así que no ha
+          +y interbloqueos entre estas dos operaciones.                  
+      322 +                                                              
+      323 +**Test obligatorio** (`api/test/room-lock.test.js`, T5), contr
+          +a la BD real. Para saber que una petición HTTP está bloqueada,
+          + el test consulta `pg_stat_activity` hasta encontrar un backen
+          +d con `wait_event_type = 'Lock'` (máx. 5 s) en lugar de usar e
+          +speras fijas.                                                 
+      324 +1. **Desactivar primero:** un cliente `pg` del test abre una t
+          +ransacción y hace `SELECT ... FOR UPDATE` de la sala (simula a
+          + RRHH a mitad de desactivar). Lanza `POST /api/bookings` para 
+          +esa sala → queda en espera. El cliente pone `is_active = false
+          +` y hace `COMMIT` → la petición responde **422 `ROOM_INACTIVE`
+          +** y no existe ninguna reserva nueva.                         
+      325 +2. **Reservar primero:** un cliente `pg` abre una transacción,
+          + hace `SELECT ... FOR SHARE` de la sala e inserta una reserva 
+          +futura (simula una reserva a mitad de crearse). Lanza `PATCH /
+          +api/rooms/:id {isActive:false}` → queda en espera. El cliente 
+          +hace `COMMIT` → el PATCH responde 200 con **`cancelledBookings
+          + >= 1`** y esa reserva está `cancelled`.                      
+      326 +3. **Estrés:** 15 `POST /api/bookings` a horarios distintos de
+          + la misma sala + 1 `PATCH {isActive:false}` en `Promise.all` →
+          + al terminar, `SELECT count(*) FROM bookings b JOIN rooms r ON
+          + r.id = b.room_id WHERE NOT r.is_active AND b.status = 'active
+          +' AND b.starts_at > now()` = **0**. Repetir 3 veces.          
+      327 +                                                              
+      328  ## 9. Pantallas
+      329  
+      330  Rutas del SPA (react-router-dom). Todas excepto `/login` requi
+           eren sesión.
+
+⏺ Update(docs/01-spec.md)
+  ⎿  Added 1 line, removed 1 line
+      109      routes/health.js  routes/auth.js  routes/rooms.js  routes/
+           bookings.js
+      110    test/
+      111      helpers.js             # crea BD reservas_test limpia, mig
+           ra, siembra, devuelve app
+      112 -    auth.test.js  rooms.test.js  bookings.test.js  concurrency
+          -.test.js                                                      
+      112 +    auth.test.js  rooms.test.js  bookings.test.js  concurrency
+          +.test.js  room-lock.test.js                                   
+      113  web/
+      114    Dockerfile               # multi-stage: node build → nginx
+      115    nginx.conf
+
+⏺ Update(docs/02-backlog.md)
+  ⎿  Added 1 line
+      89    - `routes/rooms.js` **solo** `GET /api/rooms` (el CRUD admin 
+          es T5).
+      90    - `routes/bookings.js`: `GET ?date`, `GET /mine`, `POST`, `DE
+          LETE /:id`.
+      91    - Traducción `23P01` → 409 `BOOKING_CONFLICT`.
+      92 +  - El `POST` se escribe ya como transacción explícita (`BEGIN`
+         + → validar sala → `INSERT` → `COMMIT`) con un cliente del pool.
+         + El bloqueo `FOR SHARE` de la sala (§8.1) se añade en T5 junto 
+         +con su prueba.                                                 
+      93    - `test/bookings.test.js` (un caso por regla R1–R10 y por cód
+          igo de error) y `test/concurrency.test.js` (§8, ambos casos).
+      94  - **Fuera de alcance:** UI; POST/PATCH de salas.
+      95  - **Criterios de aceptación:**
+
+⏺ Update(docs/02-backlog.md)
+  ⎿  Added 4 lines, removed 2 lines
+      125  
+      126  - **Objetivo:** que RRHH gestione las salas y pueda cancelar c
+           ualquier reserva; cerrar los huecos técnicos del README.
+      127  - **Dependencias:** T4.
+      128 -- **Spec:** §2, §4 R9, R12 y R13, §7.2 filas `rooms`, §9 `/adm
+          -in/salas` y cancelación por admin en agenda, §9.1, §10.1 `admi
+          -n.spec.js`.                                                   
+      128 +- **Spec:** §2, §4 R7, R9, R12 y R13, §7.2 filas `rooms`, **§8
+          +.1 (completo)**, §9 `/admin/salas` y cancelación por admin en 
+          +agenda, §9.1, §10.1 `admin.spec.js`.                          
+      129  - **Alcance:**
+      130 -  - `POST /api/rooms`, `PATCH /api/rooms/:id` (desactivar canc
+          -ela futuras en transacción), `includeInactive` para admin.    
+      130 +  - `POST /api/rooms`, `PATCH /api/rooms/:id` (transacción con
+          + `SELECT ... FOR UPDATE` de la sala; desactivar cancela las fu
+          +turas), `includeInactive` para admin.                         
+      131 +  - Modificar `POST /api/bookings` para bloquear la sala con `
+          +SELECT ... FOR SHARE` dentro de su transacción, antes del INSE
+          +RT (§8.1).                                                    
+      132    - `test/rooms.test.js`: roles (employee → 403), nombre dupli
+           cado (409), desactivar cancela reservas futuras y devuelve `ca
+           ncelledBookings`.
+      133 +  - `test/room-lock.test.js`: los 3 escenarios del §8.1.      
+      134    - Página `/admin/salas`, enlace `nav-salas` solo admin, redi
+           rección de employee, botón cancelar en reservas ajenas para ad
+           min.
+      135    - `e2e/tests/admin.spec.js` con capturas `results/admin-*.pn
+           g`.
+      136    - Revisar que el README describe exactamente lo construido (
+           puertos, usuarios, comandos).
+
+⏺ Update(docs/02-backlog.md)
+  ⎿  Added 2 lines, removed 1 line
+      138  - **Criterios de aceptación:**
+      139    1. Escenario `admin.spec.js` del §10.1 pasa.
+      140    2. Tests de `rooms.test.js` pasan y no hay regresiones (API 
+           + e2e completo).
+      141 -  3. Desde clon limpio (`git clone` a carpeta temporal + `dock
+          -er compose up -d --build`) todo queda `healthy` y la demo func
+          -iona.                                                         
+      141 +  3. `room-lock.test.js`: "desactivar primero" → 422 `ROOM_INA
+          +CTIVE` sin reserva creada; "reservar primero" → `cancelledBook
+          +ings >= 1` y la reserva queda `cancelled`; estrés → 0 reservas
+          + activas futuras en salas inactivas. `npm test` pasa **3 veces
+          + seguidas**.                                                  
+      142 +  4. Desde clon limpio (`git clone` a carpeta temporal + `dock
+          +er compose up -d --build`) todo queda `healthy` y la demo func
+          +iona.                                                         
+      143  - **Cómo se verifica:** `docker compose exec api npm test`; sk
+           ill `verificar-ui` con la suite completa; prueba de clon limpi
+           o.
+      144  - **Riesgos:** dejar la UI sin actualizar tras desactivar una 
+           sala (refrescar la lista de salas y la agenda).
+
+⏺ Update(docs/02-backlog.md)
+  ⎿  Added 1 line, removed 1 line
+      141    3. `room-lock.test.js`: "desactivar primero" → 422 `ROOM_INA
+           CTIVE` sin reserva creada; "reservar primero" → `cancelledBook
+           ings >= 1` y la reserva queda `cancelled`; estrés → 0 reservas
+            activas futuras en salas inactivas. `npm test` pasa **3 veces
+            seguidas**.
+      142    4. Desde clon limpio (`git clone` a carpeta temporal + `dock
+           er compose up -d --build`) todo queda `healthy` y la demo func
+           iona.
+      143  - **Cómo se verifica:** `docker compose exec api npm test`; sk
+           ill `verificar-ui` con la suite completa; prueba de clon limpi
+           o.
+      144 -- **Riesgos:** dejar la UI sin actualizar tras desactivar una 
+          -sala (refrescar la lista de salas y la agenda).               
+      144 +- **Riesgos:** dejar la UI sin actualizar tras desactivar una 
+          +sala (refrescar la lista de salas y la agenda). Test de bloque
+          +o intermitente si se usan esperas fijas (usar `pg_stat_activit
+          +y`, §8.1). Olvidar liberar el cliente del pool tras un error e
+          +n la transacción (usar `try/finally` con `ROLLBACK` y `release
+          +`).                                                           
+
+⏺ Update(docs/02-backlog.md)
+  ⎿  Added 2 lines, removed 2 lines
+      30  | T2 | Base de datos, migraciones, seed y autenticación | S2 | 
+          No (tests de API) | 25 min |
+      31  | T3 | API de reservas con garantía anti-choque y test de concu
+          rrencia | S3 | No (tests de API) | 30 min |
+      32  | T4 | Interfaz de empleado: login, agenda, reservar, mis reser
+          vas | S4 | Sí (skill verificar-ui) | 35 min |
+      33 -| T5 | Administración de salas (RRHH) y cancelación por admin |
+         - S5 | Sí (skill verificar-ui) | 25 min |                       
+      33 +| T5 | Administración de salas (RRHH), bloqueo sala/reserva y c
+         +ancelación por admin | S5 | Sí (skill verificar-ui) | 35 min | 
+      34  | — | Cierre: `04-cierre.md` con DoD y evidencias | S6 | — | 20
+           min |
+      35  
+      36 -Total estimado: unos 45 min de S0 + 2 h 40 min de ejecución y c
+         -ierre.                                                         
+      36 +Total estimado: unos 45 min de S0 + 2 h 50 min de ejecución y c
+         +ierre.                                                         
+      37  
+      38  ---
+      39  
+
+⏺ Ahora reescribo CLAUDE.md con los dos modos y ajusto la instrucción del README
+  para que active el modo reconstrucción.
+
+⏺ Write(CLAUDE.md)
+  ⎿  Added 30 lines, removed 9 lines
+       8  2. `docs/02-backlog.md`: tareas en orden, DoR y DoD.
+       9  3. `docs/00-decisiones.md`: el porqué de cada decisión. No reab
+          ras decisiones ya tomadas.
+      10  
+      11 -## Reglas no negociables                                       
+      11 +## Modos de trabajo                                            
+      12  
+      13 -1. **La garantía anti-choque vive en PostgreSQL** (`EXCLUDE ...
+         - bookings_no_overlap`, spec §6.1). Nunca la sustituyas ni la "r
+         -efuerces" con un SELECT previo, un lock en memoria o una compro
+         -bación en el frontend. El SQL del §6.1 se copia **literal**.   
+      13 +Hay dos modos. **Por defecto estás en modo Desarrollo.** Solo p
+         +asas a modo Reconstrucción si la instrucción que recibes dice e
+         +xplícitamente "modo reconstrucción".                           
+      14 +                                                               
+      15 +### Modo Desarrollo (por defecto)                              
+      16 +                                                               
+      17 +Trabajo normal con el responsable, una tarea por sesión.       
+      18 +                                                               
+      19 +1. **Plan corto antes de escribir código:** al empezar una tare
+         +a, presenta un plan breve (archivos que vas a crear o cambiar, 
+         +pasos, cómo lo vas a verificar y dudas abiertas) y **espera el 
+         +OK del responsable**. No escribas código antes de ese OK.      
+      20 +2. **Si el spec no resuelve algo, pregunta.** No lo decidas tú.
+         + Con la respuesta, **primero** escribe la decisión en `docs/00-
+         +decisiones.md` → "Decisiones durante la ejecución" (fecha, tare
+         +a, duda, decisión, porqué) y **después** escribe el código.    
+      21 +3. Al cerrar cada tarea, haz el registro obligatorio (ver abajo
+         +).                                                             
+      22 +                                                               
+      23 +### Modo Reconstrucción (solo si la instrucción lo dice)       
+      24 +                                                               
+      25 +Lo usa el equipo revisor para reconstruir el producto desde la 
+         +documentación, sin nadie a quien preguntar.                    
+      26 +                                                               
+      27 +1. **No preguntes ni esperes OK.** Ejecuta T1 → T5 seguidas.   
+      28 +2. Si el spec no resuelve algo, **elige la opción más simple qu
+         +e cumpla el spec** y sigue.                                    
+      29 +3. **Escribe tus notas solo en `docs/reconstruccion/`**: un arc
+         +hivo por tarea (`TX.md`) con lo hecho, las decisiones que tomas
+         +te y su porqué, y la verificación con su resultado, más un `res
+         +umen.md` final. **No modifiques** `docs/00-decisiones.md`, `01-
+         +spec.md`, `02-backlog.md`, `03-bitacora.md`, `04-cierre.md`, `d
+         +ocs/tareas/` ni `docs/sesiones/`: son el registro original y de
+         +ben quedar intactos.                                           
+      30 +4. El resto de reglas (abajo) se aplican igual.                
+      31 +                                                               
+      32 +## Reglas no negociables (ambos modos)                         
+      33 +                                                               
+      34 +1. **La garantía anti-choque vive en PostgreSQL** (`EXCLUDE ...
+         + bookings_no_overlap`, spec §6.1). Nunca la sustituyas ni la "r
+         +efuerces" con un SELECT previo de disponibilidad, un lock en me
+         +moria o una comprobación en el frontend. El SQL del §6.1 se cop
+         +ia **literal**. El único bloqueo previo permitido es el de la f
+         +ila de la sala (`FOR SHARE` / `FOR UPDATE`, spec §8.1), que pro
+         +tege "sala activa", no el solapamiento.                        
+      35  2. **Una tarea a la vez, en orden** (T1 → T5). No adelantes tra
+          bajo de tareas futuras. No empieces una tarea si la anterior no
+           cumple su DoD.
+      15 -3. **Versiones exactas** del spec §5.1. No añadas dependencias 
+         -que no estén listadas; si crees que hace falta una, anótala com
+         -o decisión nueva con su porqué antes de usarla.                
+      36 +3. **Versiones exactas** del spec §5.1. No añadas dependencias 
+         +que no estén listadas. En Desarrollo, pregunta; en Reconstrucci
+         +ón, anótalo en `docs/reconstruccion/`.                         
+      37  4. **Contratos exactos:** rutas, JSON, códigos de error, mensaj
+          es y `data-testid` como dice el spec. Mismo nombre, misma forma
+          .
+      38  5. **Todo debe funcionar con `docker compose up`** desde un clo
+          n limpio, sin `.env` ni pasos manuales.
+      18 -6. **Verifica antes de declarar algo hecho:** ejecuta los coman
+         -dos de "Cómo se verifica" de la tarea y pega el resultado en el
+         - archivo de la tarea. Si algo falla, dilo; no lo maquilles.    
+      39 +6. **Verifica antes de declarar algo hecho:** ejecuta los coman
+         +dos de "Cómo se verifica" de la tarea y registra el resultado. 
+         +Si algo falla, dilo; no lo maquilles.                          
+      40  7. **Interfaz:** en las tareas que tocan la UI (T1, T4, T5) usa
+           la skill `.claude/skills/verificar-ui` y **mira las capturas**
+           antes de cerrar.
+      41  8. **Git:** solo commits locales, un commit al cerrar cada tare
+          a con el mensaje `TX: <resumen>`. **Nunca hagas `git push`** ni
+           configures remotos salvo que el responsable lo pida explícitam
+          ente en ese momento.
+      21 -9. **Ambigüedad:** si el spec no lo cubre, elige la opción más 
+         -simple que cumpla el spec, anótala en `docs/00-decisiones.md` →
+         - "Decisiones durante la ejecución" (fecha, tarea, decisión, por
+         -qué) y sigue. No preguntes salvo que bloquee.                  
+      22 -10. Código e identificadores en inglés; textos de UI, errores y
+         - documentación en español.                                     
+      42 +9. Código e identificadores en inglés; textos de UI, errores y 
+         +documentación en español.                                      
+      43  
+      24 -## Registro obligatorio al cerrar cada tarea                   
+      44 +## Registro obligatorio al cerrar cada tarea (modo Desarrollo) 
+      45  
+      26 -1. `docs/tareas/TX-<nombre-corto>.md` con la plantilla `docs/ta
+         -reas/_plantilla.md`. Si el archivo ya existe (p. ej. en una rec
+         -onstrucción), **añade** una sección nueva al final con la fecha
+         -; nunca borres registro previo.                                
+      46 +1. `docs/tareas/TX-<nombre-corto>.md` con la plantilla `docs/ta
+         +reas/_plantilla.md`.                                           
+      47  2. Entrada en `docs/03-bitacora.md` con fecha y hora (`date '+%
+          Y-%m-%d %H:%M'`). Solo se añade, nunca se reescribe.
+      28 -3. Decisiones nuevas en `docs/00-decisiones.md`.               
+      48 +3. Decisiones nuevas en `docs/00-decisiones.md` (ya escritas an
+         +tes del código, según el punto 2 del modo Desarrollo).         
+      49  4. Commit local.
+      50 +5. Recordar al responsable que exporte la sesión (`/export` → `
+         +docs/sesiones/`).                                              
+      51  
+      52  ## Comandos útiles
+      53  
+
+⏺ Update(README.md)
+  ⎿  Added 3 lines, removed 1 line
+       9  Para reconstruir el producto desde la documentación, da al agen
+          te (Claude Code o Codex), en la raíz del repositorio, esta inst
+          rucción:
+      10  
+      11  ```
+      12 -Lee CLAUDE.md y sigue sus reglas. Después ejecuta, en orden y u
+         -na por una, las tareas T1 a T5 de docs/02-backlog.md conforme a
+         - docs/01-spec.md. No pases a la siguiente tarea sin cumplir su 
+         -DoD y su registro (docs/tareas, bitácora y commit local). Al te
+         -rminar, comprueba que `docker compose down -v && docker compose
+         - up -d --build` deja todo healthy y que los tests de API y de i
+         -nterfaz pasan.                                                 
+      12 +Trabaja en modo reconstrucción. Lee CLAUDE.md y sigue sus regla
+         +s para ese modo. Ejecuta, en orden y una por una, las tareas T1
+         + a T5 de docs/02-backlog.md conforme a docs/01-spec.md, sin ped
+         +ir confirmación. No pases a la siguiente tarea sin cumplir sus 
+         +criterios de aceptación. Escribe tus notas solo en docs/reconst
+         +ruccion/ y haz un commit local por tarea. Al terminar, comprueb
+         +a que `docker compose down -v && docker compose up -d --build` 
+         +deja todo healthy y que los tests de API y de interfaz pasan, y
+         + resume el resultado en docs/reconstruccion/resumen.md.        
+      13  ```
+      14  
+      15 +En modo reconstrucción el agente no pregunta: si el spec no res
+         +uelve algo, elige lo más simple que lo cumpla y lo anota en `do
+         +cs/reconstruccion/`. El registro original (`docs/00` a `04`, `d
+         +ocs/tareas`, `docs/sesiones`) queda intacto para poder comparar
+         +.                                                              
+      16 +                                                               
+      17  ## Requisitos
+      18  
+      19  - Docker Desktop (o Docker Engine) con Docker Compose v2.
+
+⏺ Update(README.md)
+  ⎿  Added 1 line
+      72  | `docs/04-cierre.md` | Reporte de cierre con la DoD y evidenci
+          as |
+      73  | `docs/tareas/` | Un archivo por tarea con lo que hizo el agen
+          te |
+      74  | `docs/sesiones/` | Conversaciones exportadas del agente |
+      75 +| `docs/reconstruccion/` | Notas del agente cuando reconstruye 
+         +en modo reconstrucción (vacío en el desarrollo original) |     
+      76  | `.claude/skills/verificar-ui/` | Skill para verificar la inte
+          rfaz con Playwright en Docker |
+
+⏺ Update(README.md)
+  ⎿  Added 1 line, removed 1 line
+      58  docker compose --profile e2e run --rm --build e2e
+      59  ```
+      60  
+      61 -Los tests de API usan una base aparte (`reservas_test`) y no to
+         -can los datos de la demo.                                      
+      61 +Los tests de API usan una base aparte (`reservas_test`) y no to
+         +can los datos de la demo. También prueban que una reserva hecha
+         + mientras RRHH desactiva una sala nunca queda activa en la sala
+         + inactiva (bloqueo de fila, `docs/01-spec.md` §8.1).           
+      62  
+      63  ## Documentación
+      64  
+
+⏺ Write(docs/reconstruccion/README.md)
+  ⎿  Wrote 5 lines to docs/reconstruccion/README.md
+      1 # Reconstrucción
+      2
+      3 Carpeta reservada para el **modo reconstrucción** (ver `CLAUDE.md
+        `). Cuando el equipo revisor reconstruya el producto desde la doc
+        umentación, el agente escribirá aquí, y solo aquí, sus notas: un
+        `TX.md` por tarea y un `resumen.md` final.
+      4
+      5 Durante el desarrollo original esta carpeta queda vacía a propósi
+        to.
+
+  Ran 1 shell command (ctrl+o to expand)
+⏺ Update(.claude/skills/verificar-ui/SKILL.md)
+  ⎿  Added 1 line, removed 1 line
+      30     - Que la pantalla es legible: nada superpuesto, textos no co
+          rtados, la rejilla de la agenda alineada.
+      31     - Si falla un test, abre las capturas de fallo en `e2e/resul
+          ts/test-results/`.
+      32  
+      33 -5. **Registrar** en el archivo de la tarea (`docs/tareas/TX-*.m
+         -d`), sección "Verificación":                                   
+      33 +5. **Registrar** en el archivo de la tarea, sección "Verificaci
+         +ón" (modo Desarrollo: `docs/tareas/TX-*.md`; modo Reconstrucció
+         +n: `docs/reconstruccion/TX.md`):                               
+      34     - Comando ejecutado y salida resumida (`N passed` / fallos).
+      35     - Lista de capturas revisadas y qué se observó en cada una.
+      36     - Problemas visuales encontrados y si se corrigieron.
+
+⏺ Update(docs/03-bitacora.md)
+  ⎿  Added 2 lines
+      10  - **16:39** · S0 · Verificación técnica de Playwright en Docker
+          : compose temporal con nginx + `mcr.microsoft.com/playwright:v1
+          .65.1-noble` en la misma red. Primer intento falló por usar `ti
+          meout` (no existe en macOS); segundo intento: `1 passed`, captu
+          ra escrita en el volumen montado. Conclusión: viable (D-15).
+      11  - **16:40** · S0 · Consulta de versiones actuales para fijarlas
+           en el spec: express 5.3.0, pg 8.23.1, bcryptjs 3.0.3, jsonwebt
+          oken 9.0.3, supertest 7.3.2, react 19.3.1, react-router-dom 7.1
+          8.5, vite 8.3.8, @vitejs/plugin-react 6.3.0, @playwright/test 1
+          .65.1; imágenes postgres 16.16, node 22.23.5, nginx 1.27.5.
+      12  - **16:43** · S0 · Redactados `docs/00-decisiones.md` (25 decis
+          iones, confirmadas y propuestas), `docs/01-spec.md`, `docs/02-b
+          acklog.md` (T1–T5 con DoR/DoD), `CLAUDE.md`, `README.md` con la
+           instrucción única, skill `.claude/skills/verificar-ui`, planti
+          lla de tareas y guía de sesiones. Pendiente: revisión del respo
+          nsable y commit local de S0.
+      13 +- **~16:50** · S0 · Revisión del responsable: confirma todas la
+         +s decisiones propuestas (incluidas D-09, D-10 y D-24) y pide 2 
+         +cambios. (1) `CLAUDE.md` con dos modos: Desarrollo (plan corto 
+         +y OK antes de escribir código; si el spec no lo resuelve, el ag
+         +ente pregunta y la decisión se escribe antes del código) y Reco
+         +nstrucción (solo si la instrucción lo dice: sin preguntas, opci
+         +ón más simple, notas solo en `docs/reconstruccion/`). (2) Carre
+         +ra en D-13: una reserva creada mientras RRHH desactiva una sala
+         + podía quedar activa en una sala inactiva; se pide bloquear la 
+         +fila de la sala al desactivar y al reservar, con una prueba.   
+      14 +- **16:54** · S0 · Cambios aplicados: D-26 (bloqueo `FOR SHARE`
+         + al reservar y `FOR UPDATE` al modificar sala; la FK solo toma 
+         +`FOR KEY SHARE`, por eso no bastaba) y D-27 (dos modos); spec R
+         +12 y nueva §8.1 con el SQL de ambas transacciones y 3 escenario
+         +s de prueba (`room-lock.test.js`, detectando la espera con `pg_
+         +stat_activity` en vez de esperas fijas); T5 ampliada (estimació
+         +n de 25 a 35 min); T3 deja el POST como transacción explícita p
+         +ara que T5 solo añada el bloqueo; `CLAUDE.md` reescrito con los
+         + dos modos; la instrucción del README activa el modo reconstruc
+         +ción; carpeta `docs/reconstruccion/` creada. Commit local de S0
+         +.                                                              
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Apliqué las tres observaciones e hice el commit local de la S0: 014e668. No
+  hay ningún remoto configurado, así que no se subió nada.
+
+  1. Dos modos en CLAUDE.md
+  - Desarrollo es el modo por defecto. Al empezar cada tarea presento un plan
+    corto y espero tu OK antes de escribir código. Si el spec no resuelve algo,
+    te pregunto, y la decisión queda escrita en 00-decisiones.md antes del
+    código.
+  - Reconstrucción solo se activa si la instrucción dice "modo reconstrucción".
+    En ese modo el agente no pregunta, elige lo más simple que cumpla el spec y
+    escribe solo en docs/reconstruccion/. Tiene prohibido modificar el registro
+    original.
+  - La instrucción única del README.md ahora activa ese modo de forma explícita.
+    La skill verificar-ui también guarda sus resultados en la carpeta que
+    corresponde a cada modo.
+
+  2. Carrera entre "desactivar sala" y "crear reserva" (D-26, spec §8.1 y T5)
+  - Al reservar, la API bloquea la fila de la sala con FOR SHARE y comprueba que
+    esté activa antes de insertar. Al modificar una sala, la bloquea con FOR
+    UPDATE. Las dos operaciones quedan en fila, sin importar cuál llegue
+    primero:
+    - Si RRHH desactiva primero, la reserva responde 422 ROOM_INACTIVE.
+    - Si la reserva entra primero, la desactivación la ve y la cancela.
+  - Dejé documentado en el spec por qué la clave foránea sola no bastaba: solo
+    toma FOR KEY SHARE, que no choca con cambiar is_active.
+  - FOR SHARE sigue dejando que varias reservas de la misma sala se procesen a
+    la vez. El choque entre ellas lo sigue resolviendo la restricción EXCLUDE.
+  - La prueba room-lock.test.js cubre tres escenarios: desactivar primero,
+    reservar primero y uno de estrés. Para saber que una petición está esperando
+    el bloqueo, consulta pg_stat_activity en lugar de usar esperas fijas, así
+    no falla de forma intermitente.
+  - En T3 el POST ya se escribe como transacción, para que en T5 solo haga falta
+    añadir el bloqueo. La estimación de T5 sube de 25 a 35 minutos.
+
+  3. Decisiones: todas quedaron confirmadas, de la D-01 a la D-27.
+
+  Siguientes pasos:
+  1. Exporta esta sesión con /export como docs/sesiones/S0-planificacion.txt. Lo
+     incluyo en el commit de la T1.
+  2. Abre una sesión nueva y pide la T1. Te mostraré el plan corto y esperaré tu
+     OK antes de escribir código.
