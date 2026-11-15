@@ -1,5 +1,6 @@
 const express = require('express');
 const healthRouter = require('./routes/health');
+const authRouter = require('./routes/auth');
 const { notFoundHandler, errorHandler } = require('./errors');
 
 function createApp() {
@@ -7,6 +8,7 @@ function createApp() {
   app.use(express.json());
 
   app.use('/api/health', healthRouter);
+  app.use('/api/auth', authRouter);
 
   app.use('/api', notFoundHandler);
   app.use(errorHandler);

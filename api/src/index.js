@@ -1,10 +1,11 @@
 const { pool } = require('./db');
 const { createApp } = require('./app');
+const { migrate } = require('./migrate');
+const { seed } = require('./seed');
 
 const PORT = Number(process.env.PORT) || 3000;
 
-// Spec §5.4 paso 1: esperar a la BD (reintento cada 1 s, máx. 30).
-// Migrar y seed se añaden en T2 (D-29).
+// Spec §5.4: esperar a la BD (reintento cada 1 s, máx. 30) → migrar → seed → escuchar.
 async function waitForDb(retries = 30) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -20,6 +21,8 @@ async function waitForDb(retries = 30) {
 
 async function main() {
   await waitForDb();
+  await migrate(pool);
+  await seed(pool);
   createApp().listen(PORT, () => {
     console.log(`API escuchando en el puerto ${PORT}`);
   });

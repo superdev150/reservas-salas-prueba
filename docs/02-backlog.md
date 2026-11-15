@@ -45,7 +45,7 @@ Total estimado: unos 45 min de S0 + 2 h 50 min de ejecución y cierre.
 - **Alcance:**
   - `.gitignore`, `docker-compose.yml` con los 4 servicios del §5.3 (healthchecks, perfil `e2e`).
   - `.dockerignore` en `api/`, `web/` y `e2e/` con el contenido del §5.2 (D-31).
-  - `api/`: Dockerfile (`node:22-alpine`, `npm ci`, incluye devDependencies para poder ejecutar tests), `package.json` con versiones exactas, `src/index.js`, `src/app.js`, `src/db.js`, `src/errors.js`, `routes/health.js`. Script `npm test` = `node --test "test/**/*.test.js"` (D-33).
+  - `api/`: Dockerfile (`node:22-alpine`, `npm ci`, incluye devDependencies para poder ejecutar tests), `package.json` con versiones exactas, `src/index.js`, `src/app.js`, `src/db.js`, `src/errors.js`, `routes/health.js`. Script `npm test` = `node --test --test-concurrency=1 "test/**/*.test.js"` (D-33, D-34).
   - `web/`: Vite + React, `nginx.conf` (SPA fallback a `index.html` y proxy `/api/` → `http://api:3000`), Dockerfile multi-stage. Página que muestra `API: ok` / `API: error` con `data-testid="api-status"`.
   - `e2e/`: Dockerfile desde la imagen de Playwright, `playwright.config.js` (baseURL desde `BASE_URL`, solo chromium, reporter `line`, `outputDir: results/test-results`), `tests/smoke.spec.js` con captura `results/smoke.png`.
   - `api/test/health.test.js` que comprueba 200 en `/api/health`.

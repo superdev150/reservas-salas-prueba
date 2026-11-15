@@ -238,22 +238,22 @@ Base `/api`. JSON en request y response. Autenticación con cabecera `Authorizat
 ```
 `message` en español y apto para mostrar al usuario.
 
-| Código | HTTP | Cuándo |
-|---|---|---|
-| `VALIDATION_ERROR` | 400 | Cuerpo/parámetros con formato inválido o faltantes |
-| `UNAUTHORIZED` | 401 | Sin token, token inválido o expirado |
-| `INVALID_CREDENTIALS` | 401 | Login con correo o contraseña incorrectos (mismo mensaje en ambos casos) |
-| `FORBIDDEN` | 403 | Rol insuficiente o reserva ajena |
-| `NOT_FOUND` | 404 | Recurso inexistente |
-| `BOOKING_CONFLICT` | 409 | R1 |
-| `ROOM_NAME_TAKEN` | 409 | R13 |
-| `BOOKING_NOT_CANCELLABLE` | 409 | R10 |
-| `INVALID_SLOT` | 422 | R2, R3 |
-| `OUTSIDE_BUSINESS_HOURS` | 422 | R4 |
-| `IN_PAST` | 422 | R5 |
-| `TOO_FAR_AHEAD` | 422 | R6 |
-| `ROOM_INACTIVE` | 422 | R7 |
-| `INTERNAL_ERROR` | 500 | Cualquier otro (sin filtrar detalles internos) |
+| Código | HTTP | Cuándo | Mensaje (`message`, D-35) |
+|---|---|---|---|
+| `VALIDATION_ERROR` | 400 | Cuerpo/parámetros con formato inválido o faltantes | Login sin correo/contraseña válidos: "Correo y contraseña son obligatorios." · JSON mal formado: "El cuerpo de la petición no es JSON válido." · Resto: se fija en T3/T5 |
+| `UNAUTHORIZED` | 401 | Sin token, token inválido o expirado | "Sesión no válida o expirada." |
+| `INVALID_CREDENTIALS` | 401 | Login con correo o contraseña incorrectos (mismo mensaje en ambos casos) | "Correo o contraseña incorrectos." |
+| `FORBIDDEN` | 403 | Rol insuficiente o reserva ajena | "No tienes permiso para esta acción." |
+| `NOT_FOUND` | 404 | Recurso inexistente | "Recurso no encontrado." |
+| `BOOKING_CONFLICT` | 409 | R1 | "La sala ya está reservada en ese horario." |
+| `ROOM_NAME_TAKEN` | 409 | R13 | Se fija en T3/T5 |
+| `BOOKING_NOT_CANCELLABLE` | 409 | R10 | Se fija en T3/T5 |
+| `INVALID_SLOT` | 422 | R2, R3 | Se fija en T3/T5 |
+| `OUTSIDE_BUSINESS_HOURS` | 422 | R4 | Se fija en T3/T5 |
+| `IN_PAST` | 422 | R5 | Se fija en T3/T5 |
+| `TOO_FAR_AHEAD` | 422 | R6 | Se fija en T3/T5 |
+| `ROOM_INACTIVE` | 422 | R7 | Se fija en T3/T5 |
+| `INTERNAL_ERROR` | 500 | Cualquier otro (sin filtrar detalles internos) | "Error interno del servidor." |
 
 ### 7.1 Representaciones
 
