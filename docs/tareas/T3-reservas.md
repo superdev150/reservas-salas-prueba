@@ -25,6 +25,7 @@ T3 de `02-backlog.md`: reservar, consultar y cancelar por API cumpliendo R1–R1
 - D-39: orden de errores en `DELETE`: 404 → 403 → 409.
 - D-40: R7 y R10 se preparan en los tests con SQL directo.
 - D-41: test de control negativo en su propio archivo.
+- D-42: el control negativo usa su propia base `reservas_test_control` (ajuste pedido por el responsable tras cerrar la tarea).
 
 ## Verificación
 | Criterio de aceptación | Comando / evidencia | Resultado |
@@ -58,6 +59,20 @@ Capturas revisadas: no aplica (T3 no toca la UI, D-16).
 
 ## Problemas y correcciones
 - El primer `curl` de la agenda falló porque zsh interpretó el `?` de la URL como un comodín. Se repitió con la URL entre comillas: 200, solo con la demo. No era un fallo de la API.
+
+## Ajuste posterior: aislamiento del control negativo (D-42)
+- **Duda del responsable:** el control quita la restricción; ¿afecta a otras pruebas si corren a la vez?
+- **Comprobación previa:** con `npm test` (en serie) no afecta. En orden directo e invertido todo pasa y `reservas` conserva la restricción. Pero forzando `--test-concurrency=2`, el control y la concurrencia chocaban al recrear `reservas_test` (`duplicate key ... pg_database_datname_index`).
+- **Cambio:** `setupTestDb(dbName)` acepta el nombre de la base (solo `reservas_test` o `reservas_test_<sufijo>`, y falla si `src/db` ya estaba cargado). El control usa `reservas_test_control` y comprueba `current_database()`. Spec §8 y §10 actualizados.
+- **Verificación:**
+
+| Comprobación | Resultado |
+|---|---|
+| `node --test --test-concurrency=2 test/concurrency-control.test.js test/concurrency.test.js` ×3 | ✅ 4/4 en las 3 |
+| Restricción por base tras las pruebas | `reservas` 1 · `reservas_test` 1 · `reservas_test_control` 0 |
+| `npm test` ×3 | ✅ 40/40 en las 3 |
+| Smoke e2e | ✅ `1 passed` |
+| Suite completa forzada con `--test-concurrency=4` | ❌ esperado: auth, bookings, rooms, health y concurrency comparten `reservas_test`; por eso `npm test` las ejecuta en serie (D-34). Queda fuera del alcance de D-42 |
 
 ## DoD
 - [x] Criterios de aceptación cumplidos

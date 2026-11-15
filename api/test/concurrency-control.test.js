@@ -1,8 +1,8 @@
 // Control negativo (D-41): sin la restricción bookings_no_overlap, las mismas 20 peticiones
 // idénticas entran todas. Demuestra que el código no tiene ninguna otra comprobación de
 // solapamiento: el único origen del 409 BOOKING_CONFLICT es PostgreSQL.
-// Va en su propio archivo: helpers.js recrea reservas_test por archivo, así que quitar la
-// restricción aquí no afecta al resto de pruebas.
+// Usa su propia base reservas_test_control (D-42): quitar la restricción aquí nunca afecta
+// a las demás pruebas, aunque corran en paralelo.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const request = require('supertest');
@@ -16,7 +16,9 @@ let day;
 
 before(async () => {
   let app;
-  ({ app, pool } = await setupTestDb());
+  ({ app, pool } = await setupTestDb('reservas_test_control'));
+  const { rows } = await pool.query('SELECT current_database() AS db');
+  assert.strictEqual(rows[0].db, 'reservas_test_control');
   server = app.listen(0);
   token = await loginAs(app, 'luis@empresa.local');
   day = dates().next;

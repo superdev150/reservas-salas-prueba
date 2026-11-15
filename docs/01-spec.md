@@ -301,7 +301,7 @@ Base `/api`. JSON en request y response. Autenticación con cabecera `Authorizat
 
 - La garantía es R1 en BD. El INSERT es una sola sentencia; PostgreSQL serializa el chequeo de la restricción, así que de N inserciones simultáneas que se solapan, **exactamente una** tiene éxito.
 - **Test obligatorio** (`api/test/concurrency.test.js`): lanzar con `Promise.all` **20** `POST /api/bookings` idénticos (mismo usuario, sala y horario) contra la BD real → exactamente 1 respuesta 201, 19 respuestas 409 `BOOKING_CONFLICT`, y `SELECT count(*)` de reservas activas de ese horario = 1. Segundo caso: 20 peticiones de **distintos horarios solapados parcialmente** (p. ej. inicios escalonados de 15 min con 60 min de duración) → en BD no existe ningún par solapado (verificado con un self-join).
-- **Control negativo** (`api/test/concurrency-control.test.js`, D-41, en archivo propio): borra `bookings_no_overlap` en `reservas_test` y repite las 20 peticiones idénticas → todas 201. Demuestra que no hay otra comprobación en el código: el único origen del 409 es la restricción.
+- **Control negativo** (`api/test/concurrency-control.test.js`, D-41, D-42, en archivo propio): usa su propia base **`reservas_test_control`** (no `reservas_test`), borra en ella `bookings_no_overlap` y repite las 20 peticiones idénticas → todas 201. Demuestra que no hay otra comprobación en el código: el único origen del 409 es la restricción.
 - El pool de `pg` debe tener al menos 10 conexiones para que la concurrencia sea real.
 
 ### 8.1 Carrera "desactivar sala" vs "crear reserva" (R12, D-26)
@@ -367,7 +367,7 @@ Rutas del SPA (react-router-dom). Todas excepto `/login` requieren sesión.
 | API | `node:test` + `supertest` contra PostgreSQL real | `docker compose exec api npm test` | Auth, roles, reglas R1–R13, concurrencia |
 | UI | Playwright en contenedor | `docker compose --profile e2e run --rm --build e2e` | Flujos de usuario reales vía nginx |
 
-- Los tests de API usan una base **`reservas_test`** que `test/helpers.js` borra y recrea (conectándose a la BD `postgres` del mismo servidor), migra y siembra. Nunca tocan la base `reservas` de la demo.
+- Los tests de API usan una base **`reservas_test`** que `test/helpers.js` borra y recrea (conectándose a la BD `postgres` del mismo servidor), migra y siembra. Nunca tocan la base `reservas` de la demo. Excepción: el control negativo del §8 usa **`reservas_test_control`**, para que quitar la restricción nunca afecte a otras pruebas aunque corran en paralelo (D-42). `setupTestDb(dbName)` recibe el nombre de la base (por defecto `reservas_test`).
 - Las fechas de los tests se calculan relativas a "hoy" (próximo día hábil, etc.), nunca fijas.
 - Los tests e2e dejan capturas en `e2e/results/*.png` y son repetibles: antes de cada test cancelan vía API las reservas futuras de los usuarios que usan (excepto la reserva demo de Ana).
 

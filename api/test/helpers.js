@@ -1,24 +1,37 @@
 // Spec §10: los tests usan la BD reservas_test, que se borra y recrea
 // (conectándose a la BD `postgres` del mismo servidor), se migra y se siembra.
-// Nunca tocan la BD `reservas` de la demo.
+// Nunca tocan la BD `reservas` de la demo. El control negativo usa su propia
+// base reservas_test_control (D-42), por eso el nombre es un parámetro.
+const path = require('node:path');
 const { Client } = require('pg');
 
-const TEST_DB = 'reservas_test';
+const DEFAULT_TEST_DB = 'reservas_test';
 const baseUrl = new URL(process.env.DATABASE_URL);
 const adminUrl = new URL(baseUrl);
 adminUrl.pathname = '/postgres';
-const testUrl = new URL(baseUrl);
-testUrl.pathname = `/${TEST_DB}`;
 
-// Debe ocurrir antes de cargar src/db, que crea el pool desde DATABASE_URL.
-process.env.DATABASE_URL = testUrl.toString();
+function urlFor(dbName) {
+  const url = new URL(baseUrl);
+  url.pathname = `/${dbName}`;
+  return url.toString();
+}
 
-async function setupTestDb() {
+// Valor por defecto: nada de un test puede llegar a la BD de la demo aunque cargue src/db antes.
+process.env.DATABASE_URL = urlFor(DEFAULT_TEST_DB);
+
+async function setupTestDb(dbName = DEFAULT_TEST_DB) {
+  if (!/^reservas_test(_[a-z]+)?$/.test(dbName)) throw new Error(`BD de test no válida: ${dbName}`);
+  // src/db crea el pool desde DATABASE_URL al cargarse: si ya se cargó, apuntaría a otra BD.
+  if (require.cache[path.join(__dirname, '../src/db.js')]) {
+    throw new Error('src/db ya estaba cargado antes de setupTestDb');
+  }
+  process.env.DATABASE_URL = urlFor(dbName);
+
   const admin = new Client({ connectionString: adminUrl.toString() });
   await admin.connect();
   try {
-    await admin.query(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
-    await admin.query(`CREATE DATABASE ${TEST_DB}`);
+    await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${dbName}`);
   } finally {
     await admin.end();
   }
