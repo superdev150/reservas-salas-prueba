@@ -1,0 +1,732 @@
+
+❯ Empezamos la T2 dame el plan corto y espera mi OK.
+
+⏺ Primero guardo el export de la sesión anterior (paso 0) y leo la
+  documentación.
+
+  Read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+⏺ Bash(mv S1-t1-esqueleto.txt docs/sesiones/ && git add
+      docs/sesiones/S1-t1-esqueleto.txt && git commit -q -m "S1: export de la
+      sesión de T1 (esqueleto)…)
+  ⎿  2 files changed (binary, mode only or too large to show)
+  ⎿  (files that changed while this command ran, by the command or by
+     another process; a convenience view, not a review or audit of the
+     command)
+
+⏺ Export guardado (commit d9e05cb). Reviso el Dockerfile de la API antes de
+  cerrar el plan.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Paso 0 hecho: moví S1-t1-esqueleto.txt a docs/sesiones/ y lo commiteé solo
+  (d9e05cb S1: export de la sesión de T1 (esqueleto)).
+
+  Plan T2: base de datos, migraciones, seed y autenticación
+
+  Dependencias: añado a api/package.json bcryptjs@3.0.3 y jsonwebtoken@9.0.3 con
+  versión exacta (D-28) y regenero package-lock.json con npm install dentro de
+  node:22-alpine.
+
+  Archivos que creo
+  - api/migrations/001_init.sql: el SQL del §6.1 copiado literal.
+  - api/src/migrate.js: crea schema_migrations y aplica los .sql pendientes en
+    orden alfabético, cada uno en su transacción.
+  - api/src/time.js: solo lo que necesita el seed, que es "próximo día hábil" y
+    "hora local → UTC" según APP_TIMEZONE, con Intl y sin dependencias. El resto
+    de reglas queda para T3.
+  - api/src/seed.js: carga 4 usuarios (bcrypt coste 10), 5 salas y la reserva
+    demo. Cada bloque se inserta solo si su tabla está vacía.
+  - api/src/auth.js: login, firma del JWT (HS256, 8 h, payload {sub, role}),
+    requireAuth (carga el usuario desde la BD y da 401 si no existe) y
+    requireAdmin (403).
+  - api/src/routes/auth.js: POST /api/auth/login (400 si falta o no es válido el
+    formato, 401 INVALID_CREDENTIALS con el mismo mensaje en ambos casos) y GET
+    /api/auth/me. La respuesta trae el User del §7.1, sin password_hash.
+  - api/test/helpers.js: se conecta a la BD postgres, hace DROP/CREATE
+    reservas_test, migra y siembra, y devuelve la app.
+  - api/test/auth.test.js: los casos del criterio 4.
+
+  Archivos que cambio
+  - api/src/index.js: el arranque pasa a ser esperar BD → migrar → seed →
+    escuchar (cierra D-29).
+  - api/src/db.js: si hace falta, que el pool se pueda crear desde la URL de la
+    BD de tests.
+  - api/src/app.js: monto /api/auth.
+  - api/test/health.test.js: pasa a usar helpers.js y reservas_test (D-30).
+
+  Verificación
+  1. docker compose down -v && docker compose up -d --build y después docker
+     compose ps: todo healthy.
+  2. psql '\d bookings' muestra bookings_no_overlap.
+  3. Recuento en la BD: 4 usuarios, 5 salas y 1 reserva demo en Sala 1, el lunes
+     2026-11-16 de 16:00 a 17:00 UTC.
+  4. docker compose restart api: no se duplican datos y schema_migrations sigue
+     con 1 fila.
+  5. docker compose exec api npm test pasa.
+  6. curl de login como Ana.
+
+  Después hago el registro de cierre (tarea, bitácora, commit T2: ...). T2 no
+  toca la UI, así que no corro e2e.
+
+  Dudas abiertas (necesito tu respuesta)
+  1. Tests en paralelo: node --test ejecuta cada archivo en un proceso aparte y
+     en paralelo. Si health.test.js y auth.test.js borran y recrean
+     reservas_test a la vez, chocan. Te propongo cambiar el script a node --test
+     --test-concurrency=1 "test/**/*.test.js" para que los archivos corran en
+     serie. La concurrencia que exige el §8 se prueba dentro de un mismo
+     archivo, así que no se pierde. Esto cambiaría el script fijado en D-33.
+     ¿OK?
+  2. Mensajes de la API: el spec fija los textos de la UI, pero no los message
+     de la API. Propongo:
+     - INVALID_CREDENTIALS: "Correo o contraseña incorrectos."
+     - UNAUTHORIZED: "Sesión no válida o expirada."
+     - FORBIDDEN: "No tienes permiso para esta acción."
+     - VALIDATION_ERROR en login: "Correo y contraseña son obligatorios."
+
+     ¿Te valen?
+
+  Cuando me des el OK (y tus respuestas), escribo primero las decisiones en
+  docs/00-decisiones.md y después el código.
+
+❯ OK al plan, con respecto a las dudas: 1.si que corran en serie 2.esos
+  mensajes decidelos tu solo asegurate de ponlerlos en el spec para que la
+  reconstrucción use los mismos porfa.
+
+⏺ Primero registro las decisiones y actualizo el spec, y luego escribo el
+  código.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      import re…)
+  ⎿  Updated docs/00-decisiones.md (+2 -0)
+      44  | D-31 | 2026-11-15 | T1 | ¿Hace falta `.dockerignore`? (no est
+          aba en el §5.2) | Sí: `api/`, `web/` y `e2e/` tienen `.dockerig
+          nore` que excluye `node_modules`, `dist`, resultados de e2e, `.
+          env*`, logs y archivos del sistema. Añadido al spec §5.2 | Las 
+          imágenes se construyen solo con lo versionado en el repo, sin a
+          rchivos temporales ni locales; el resultado no depende de la má
+          quina (refuerza D-07) |
+      45  | D-32 | 2026-11-15 | S1 | ¿Qué se hace con el export de la ses
+          ión anterior? | Al iniciar cada sesión (modo Desarrollo), si ha
+          y un export de la sesión anterior fuera de `docs/sesiones/` o s
+          in commitear, el agente lo mueve allí y hace un commit local so
+          lo con él. Regla escrita en `CLAUDE.md` | La memoria del agente
+           es local a la máquina; en `CLAUDE.md` la regla viaja con el re
+          positorio |
+      46  | D-33 | 2026-11-15 | T1 | El backlog fijaba `npm test` = `node
+           --test test/`, pero en Node 22 falla (toma `test/` como archiv
+          o: "Cannot find module '/app/test'") | `npm test` = `node --tes
+          t "test/**/*.test.js"`. Backlog T1 corregido | El glob explícit
+          o ejecuta solo los `*.test.js`, así que `test/helpers.js` (T2) 
+          nunca corre como test; `node --test` sin argumentos sí lo tomar
+          ía por el patrón por defecto `test/**/*.js` |
+      47 +| D-34 | 2026-11-15 | T2 | `node --test` ejecuta cada archivo d
+         +e test en un proceso propio y en paralelo; con `helpers.js` bor
+         +rando y recreando `reservas_test`, dos archivos chocarían | `np
+         +m test` = `node --test --test-concurrency=1 "test/**/*.test.js"
+         +`: los archivos corren en serie. Backlog T1 actualizado | Cada 
+         +archivo parte de una `reservas_test` limpia y predecible. La co
+         +ncurrencia del §8 se prueba dentro de un mismo archivo con `Pro
+         +mise.all`, así que correr archivos en serie no la debilita |   
+      48 +| D-35 | 2026-11-15 | T2 | El spec fijaba los códigos de error 
+         +pero no el texto de `message` | Mensajes fijos por código en el
+         + spec §7 (columna "Mensaje"): `INVALID_CREDENTIALS` "Correo o c
+         +ontraseña incorrectos.", `UNAUTHORIZED` "Sesión no válida o exp
+         +irada.", `FORBIDDEN` "No tienes permiso para esta acción.", `VA
+         +LIDATION_ERROR` en login "Correo y contraseña son obligatorios.
+         +" y con JSON mal formado "El cuerpo de la petición no es JSON v
+         +álido.", `NOT_FOUND` "Recurso no encontrado.", `INTERNAL_ERROR`
+         + "Error interno del servidor." Los mensajes de T3/T5 se fijan e
+         +n el spec al hacer esas tareas | Contrato exacto también en el 
+         +texto: una reconstrucción produce los mismos mensajes, y la UI 
+         +muestra `error.message` tal cual |                             
+  ⎿  Updated docs/01-spec.md (+16 -16)
+      238  ```
+      239  `message` en español y apto para mostrar al usuario.
+      240  
+      241 -| Código | HTTP | Cuándo |                                    
+      242 -|---|---|---|                                                 
+      243 -| `VALIDATION_ERROR` | 400 | Cuerpo/parámetros con formato inv
+          -álido o faltantes |                                           
+      244 -| `UNAUTHORIZED` | 401 | Sin token, token inválido o expirado 
+          -|                                                             
+      245 -| `INVALID_CREDENTIALS` | 401 | Login con correo o contraseña 
+          -incorrectos (mismo mensaje en ambos casos) |                  
+      246 -| `FORBIDDEN` | 403 | Rol insuficiente o reserva ajena |      
+      247 -| `NOT_FOUND` | 404 | Recurso inexistente |                   
+      248 -| `BOOKING_CONFLICT` | 409 | R1 |                             
+      249 -| `ROOM_NAME_TAKEN` | 409 | R13 |                             
+      250 -| `BOOKING_NOT_CANCELLABLE` | 409 | R10 |                     
+      251 -| `INVALID_SLOT` | 422 | R2, R3 |                             
+      252 -| `OUTSIDE_BUSINESS_HOURS` | 422 | R4 |                       
+      253 -| `IN_PAST` | 422 | R5 |                                      
+      254 -| `TOO_FAR_AHEAD` | 422 | R6 |                                
+      255 -| `ROOM_INACTIVE` | 422 | R7 |                                
+      256 -| `INTERNAL_ERROR` | 500 | Cualquier otro (sin filtrar detalle
+          -s internos) |                                                 
+      241 +| Código | HTTP | Cuándo | Mensaje (`message`, D-35) |        
+      242 +|---|---|---|---|                                             
+      243 +| `VALIDATION_ERROR` | 400 | Cuerpo/parámetros con formato inv
+          +álido o faltantes | Login sin correo/contraseña válidos: "Corr
+          +eo y contraseña son obligatorios." · JSON mal formado: "El cue
+          +rpo de la petición no es JSON válido." · Resto: se fija en T3/
+          +T5 |                                                          
+      244 +| `UNAUTHORIZED` | 401 | Sin token, token inválido o expirado 
+          +| "Sesión no válida o expirada." |                            
+      245 +| `INVALID_CREDENTIALS` | 401 | Login con correo o contraseña 
+          +incorrectos (mismo mensaje en ambos casos) | "Correo o contras
+          +eña incorrectos." |                                           
+      246 +| `FORBIDDEN` | 403 | Rol insuficiente o reserva ajena | "No t
+          +ienes permiso para esta acción." |                            
+      247 +| `NOT_FOUND` | 404 | Recurso inexistente | "Recurso no encont
+          +rado." |                                                      
+      248 +| `BOOKING_CONFLICT` | 409 | R1 | "La sala ya está reservada e
+          +n ese horario." |                                             
+      249 +| `ROOM_NAME_TAKEN` | 409 | R13 | Se fija en T3/T5 |          
+      250 +| `BOOKING_NOT_CANCELLABLE` | 409 | R10 | Se fija en T3/T5 |  
+      251 +| `INVALID_SLOT` | 422 | R2, R3 | Se fija en T3/T5 |          
+      252 +| `OUTSIDE_BUSINESS_HOURS` | 422 | R4 | Se fija en T3/T5 |    
+      253 +| `IN_PAST` | 422 | R5 | Se fija en T3/T5 |                   
+      254 +| `TOO_FAR_AHEAD` | 422 | R6 | Se fija en T3/T5 |             
+      255 +| `ROOM_INACTIVE` | 422 | R7 | Se fija en T3/T5 |             
+      256 +| `INTERNAL_ERROR` | 500 | Cualquier otro (sin filtrar detalle
+          +s internos) | "Error interno del servidor." |                 
+      257  
+      258  ### 7.1 Representaciones
+      259  
+  ⎿  Updated docs/02-backlog.md (+1 -1)
+      45  - **Alcance:**
+      46    - `.gitignore`, `docker-compose.yml` con los 4 servicios del 
+          §5.3 (healthchecks, perfil `e2e`).
+      47    - `.dockerignore` en `api/`, `web/` y `e2e/` con el contenido
+           del §5.2 (D-31).
+      48 -  - `api/`: Dockerfile (`node:22-alpine`, `npm ci`, incluye dev
+         -Dependencies para poder ejecutar tests), `package.json` con ver
+         -siones exactas, `src/index.js`, `src/app.js`, `src/db.js`, `src
+         -/errors.js`, `routes/health.js`. Script `npm test` = `node --te
+         -st "test/**/*.test.js"` (D-33).                                
+      48 +  - `api/`: Dockerfile (`node:22-alpine`, `npm ci`, incluye dev
+         +Dependencies para poder ejecutar tests), `package.json` con ver
+         +siones exactas, `src/index.js`, `src/app.js`, `src/db.js`, `src
+         +/errors.js`, `routes/health.js`. Script `npm test` = `node --te
+         +st --test-concurrency=1 "test/**/*.test.js"` (D-33, D-34).     
+      49    - `web/`: Vite + React, `nginx.conf` (SPA fallback a `index.h
+          tml` y proxy `/api/` → `http://api:3000`), Dockerfile multi-sta
+          ge. Página que muestra `API: ok` / `API: error` con `data-testi
+          d="api-status"`.
+      50    - `e2e/`: Dockerfile desde la imagen de Playwright, `playwrig
+          ht.config.js` (baseURL desde `BASE_URL`, solo chromium, reporte
+          r `line`, `outputDir: results/test-results`), `tests/smoke.spec
+          .js` con captura `results/smoke.png`.
+      51    - `api/test/health.test.js` que comprueba 200 en `/api/health
+          `.
+
+⏺ Ya están las decisiones (D-34, D-35), la tabla de mensajes en el spec §7 y el
+  backlog. Añado la entrada en la bitácora y escribo el código.
+
+⏺ Bash(cat >> docs/03-bitacora.md <<'EOF'…)
+  ⎿  Created api/migrations/001_init.sql (+40 -0)
+       1 +CREATE EXTENSION IF NOT EXISTS btree_gist;                     
+       2 +                                                               
+       3 +CREATE TABLE users (                                           
+       4 +  id            SERIAL PRIMARY KEY,                            
+       5 +  email         TEXT NOT NULL UNIQUE,                          
+       6 +  name          TEXT NOT NULL,                                 
+       7 +  password_hash TEXT NOT NULL,                                 
+       8 +  role          TEXT NOT NULL CHECK (role IN ('employee', 'admi
+         +n')),                                                          
+       9 +  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()             
+      10 +);                                                             
+      11 +                                                               
+      12 +CREATE TABLE rooms (                                           
+      13 +  id         SERIAL PRIMARY KEY,                               
+      14 +  name       TEXT NOT NULL UNIQUE CHECK (length(trim(name)) BET
+         +WEEN 1 AND 60),                                                
+      15 +  capacity   INTEGER NOT NULL CHECK (capacity BETWEEN 1 AND 100
+         +),                                                             
+      16 +  location   TEXT,                                             
+      17 +  is_active  BOOLEAN NOT NULL DEFAULT true,                    
+      18 +  created_at TIMESTAMPTZ NOT NULL DEFAULT now()                
+      19 +);                                                             
+      20 +                                                               
+      21 +CREATE TABLE bookings (                                        
+      22 +  id           SERIAL PRIMARY KEY,                             
+      23 +  room_id      INTEGER NOT NULL REFERENCES rooms(id),          
+      24 +  user_id      INTEGER NOT NULL REFERENCES users(id),          
+      25 +  title        TEXT NOT NULL CHECK (length(trim(title)) BETWEEN
+         + 1 AND 120),                                                   
+      26 +  starts_at    TIMESTAMPTZ NOT NULL,                           
+      27 +  ends_at      TIMESTAMPTZ NOT NULL,                           
+      28 +  status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN 
+         +('active', 'cancelled')),                                      
+      29 +  cancelled_at TIMESTAMPTZ,                                    
+      30 +  cancelled_by INTEGER REFERENCES users(id),                   
+      31 +  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),             
+      32 +  CONSTRAINT bookings_valid_range CHECK (ends_at > starts_at), 
+      33 +  CONSTRAINT bookings_no_overlap EXCLUDE USING gist (          
+      34 +    room_id WITH =,                                            
+      35 +    tstzrange(starts_at, ends_at, '[)') WITH &&                
+      36 +  ) WHERE (status = 'active')                                  
+      37 +);                                                             
+      38 +                                                               
+      39 +CREATE INDEX bookings_starts_at_idx ON bookings (starts_at);   
+      40 +CREATE INDEX bookings_user_idx ON bookings (user_id, starts_at)
+         +;                                                              
+  ⎿  Updated docs/03-bitacora.md (+5 -0)
+      19  - **~17:10** · S1 · OK del responsable al plan. Acepta las duda
+          s 1–3 como se propusieron y pide `.dockerignore` en api, web y 
+          e2e, anotado como decisión y en el spec. Pide también que la re
+          gla del export esté en `CLAUDE.md`, porque la memoria del agent
+          e es local. Se escriben D-28 a D-32, el spec §5.2, el backlog T
+          1 y `CLAUDE.md` antes del código.
+      20  - **~17:15** · S1 · Código de T1 escrito; los lockfiles se gene
+          ran en un contenedor `node:22-alpine`. Primera verificación: `n
+          pm test` falla (`node --test test/` no acepta directorios en No
+          de 22) y `web` queda `unhealthy` (`localhost` → `::1`, nginx so
+          lo en IPv4). Se corrige nginx con `listen [::]:80;`. Sobre el s
+          cript de test, el responsable elige el glob `test/**/*.test.js`
+           (D-33, backlog corregido).
+      21  - **17:21** · S1 · Verificación completa tras `down -v` + `up -
+          -build`: los 3 servicios `healthy`, health por nginx ok, `npm t
+          est` 1/1, e2e smoke `1 passed` y captura `smoke.png` revisada (
+          "API: ok"), `e2e` fuera de `up`. Registro en `docs/tareas/T1-es
+          queleto.md` y commit local de T1.
+      22 +                                                               
+      23 +## S2 · T2 Base de datos, migraciones, seed y autenticación (Cl
+         +aude Code, Opus 5.5)                                           
+      24 +                                                               
+      25 +- **2026-11-15 ~17:24** · S2 · Al iniciar, el export de S1 se m
+         +ueve a `docs/sesiones/` y se commitea solo. El agente presenta 
+         +el plan de T2 con dos dudas: archivos de test en paralelo contr
+         +a `reservas_test` y textos de `message` de la API.             
+      26 +- **17:27** · S2 · OK del responsable: los tests corren en seri
+         +e (D-34, `--test-concurrency=1`) y el agente decide los mensaje
+         +s, que quedan fijados en el spec §7 para que la reconstrucción 
+         +use los mismos (D-35). Se actualizan decisiones, spec y backlog
+         + antes del código.                                             
+
+⏺ Ahora los archivos de la API.
+
+⏺ Bash(cd /Users/superdev/Documents/reservas-salas/api && cat > src/migrate.js
+      <<'EOF'
+      const fs = require('node:fs');…)
+  ⎿  Updated api/package.json (+3 -1)
+       6    "main": "src/index.js",
+       7    "scripts": {
+       8      "start": "node src/index.js",
+       9 -    "test": "node --test \"test/**/*.test.js\""                
+       9 +    "test": "node --test --test-concurrency=1 \"test/**/*.test.
+         +js\""                                                          
+      10    },
+      11    "dependencies": {
+      12 +    "bcryptjs": "3.0.3",                                       
+      13      "express": "5.3.0",
+      14 +    "jsonwebtoken": "9.0.3",                                   
+      15      "pg": "8.23.1"
+      16    },
+      17    "devDependencies": {
+  ⎿  Updated api/src/app.js (+2 -0)
+      1  const express = require('express');
+      2  const healthRouter = require('./routes/health');
+      3 +const authRouter = require('./routes/auth');                    
+      4  const { notFoundHandler, errorHandler } = require('./errors');
+      5  
+      6  function createApp() {
+     ...
+       8    app.use(express.json());
+       9  
+      10    app.use('/api/health', healthRouter);
+      11 +  app.use('/api/auth', authRouter);                            
+      12  
+      13    app.use('/api', notFoundHandler);
+      14    app.use(errorHandler);
+  ⎿  Created api/src/auth.js (+52 -0)
+       1 +const jwt = require('jsonwebtoken');                           
+       2 +const { pool } = require('./db');                              
+       3 +const { AppError } = require('./errors');                      
+       4 +                                                               
+       5 +// Spec §7.3: JWT HS256, 8 h, payload { sub: userId, role }.   
+       6 +const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-cambia
+         +r-en-produccion';                                              
+       7 +const TOKEN_TTL = '8h';                                        
+       8 +                                                               
+       9 +const MSG_UNAUTHORIZED = 'Sesión no válida o expirada.';       
+      10 +const MSG_FORBIDDEN = 'No tienes permiso para esta acción.';   
+      11 +                                                               
+      12 +// Representación User del spec §7.1 (nunca incluye password_ha
+         +sh).                                                           
+      13 +function toUser(row) {                                         
+      14 +  return { id: row.id, email: row.email, name: row.name, role: 
+         +row.role };                                                    
+      15 +}                                                              
+      16 +                                                               
+      17 +function signToken(user) {                                     
+      18 +  return jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET
+         +, {                                                            
+      19 +    algorithm: 'HS256',                                        
+      20 +    expiresIn: TOKEN_TTL,                                      
+      21 +  });                                                          
+      22 +}                                                              
+      23 +                                                               
+      24 +// Carga el usuario desde BD en cada petición (si fue borrado →
+         + 401).                                                         
+      25 +async function requireAuth(req, res, next) {                   
+      26 +  const header = req.get('Authorization') || '';               
+      27 +  const match = header.match(/^Bearer (.+)$/);                 
+      28 +  if (!match) throw new AppError(401, 'UNAUTHORIZED', MSG_UNAUT
+         +HORIZED);                                                      
+      29 +                                                               
+      30 +  let payload;                                                 
+      31 +  try {                                                        
+      32 +    payload = jwt.verify(match[1], JWT_SECRET, { algorithms: ['
+         +HS256'] });                                                    
+      33 +  } catch {                                                    
+      34 +    throw new AppError(401, 'UNAUTHORIZED', MSG_UNAUTHORIZED); 
+      35 +  }                                                            
+      36 +                                                               
+      37 +  const { rows } = await pool.query('SELECT id, email, name, ro
+         +le FROM users WHERE id = $1', [                                
+      38 +    payload.sub,                                               
+      39 +  ]);                                                          
+      40 +  if (rows.length === 0) throw new AppError(401, 'UNAUTHORIZED'
+         +, MSG_UNAUTHORIZED);                                           
+     … 12 more lines (ctrl+o to expand)
+  ⎿  Updated api/src/index.js (+5 -2)
+       1  const { pool } = require('./db');
+       2  const { createApp } = require('./app');
+       3 +const { migrate } = require('./migrate');                      
+       4 +const { seed } = require('./seed');                            
+       5  
+       6  const PORT = Number(process.env.PORT) || 3000;
+       7  
+       6 -// Spec §5.4 paso 1: esperar a la BD (reintento cada 1 s, máx. 
+         -30).                                                           
+       7 -// Migrar y seed se añaden en T2 (D-29).                       
+       8 +// Spec §5.4: esperar a la BD (reintento cada 1 s, máx. 30) → m
+         +igrar → seed → escuchar.                                       
+       9  async function waitForDb(retries = 30) {
+      10    for (let attempt = 1; attempt <= retries; attempt++) {
+      11      try {
+     ...
+      21  
+      22  async function main() {
+      23    await waitForDb();
+      24 +  await migrate(pool);                                         
+      25 +  await seed(pool);                                            
+      26    createApp().listen(PORT, () => {
+      27      console.log(`API escuchando en el puerto ${PORT}`);
+      28    });
+  ⎿  Created api/src/migrate.js (+38 -0)
+       1 +const fs = require('node:fs');                                 
+       2 +const path = require('node:path');                             
+       3 +                                                               
+       4 +const MIGRATIONS_DIR = path.join(__dirname, '..', 'migrations')
+         +;                                                              
+       5 +                                                               
+       6 +// Spec §5.4 paso 2: aplica en orden alfabético los .sql no apl
+         +icados,                                                        
+       7 +// cada uno en su transacción, y los registra en schema_migrati
+         +ons.                                                           
+       8 +async function migrate(pool) {                                 
+       9 +  await pool.query(`                                           
+      10 +    CREATE TABLE IF NOT EXISTS schema_migrations (             
+      11 +      filename   TEXT PRIMARY KEY,                             
+      12 +      applied_at TIMESTAMPTZ DEFAULT now()                     
+      13 +    )                                                          
+      14 +  `);                                                          
+      15 +  const { rows } = await pool.query('SELECT filename FROM schem
+         +a_migrations');                                                
+      16 +  const applied = new Set(rows.map((r) => r.filename));        
+      17 +  const files = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.
+         +endsWith('.sql')).sort();                                      
+      18 +                                                               
+      19 +  for (const file of files) {                                  
+      20 +    if (applied.has(file)) continue;                           
+      21 +    const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file)
+         +, 'utf8');                                                     
+      22 +    const client = await pool.connect();                       
+      23 +    try {                                                      
+      24 +      await client.query('BEGIN');                             
+      25 +      await client.query(sql);                                 
+      26 +      await client.query('INSERT INTO schema_migrations (filena
+         +me) VALUES ($1)', [file]);                                     
+      27 +      await client.query('COMMIT');                            
+      28 +      console.log(`Migración aplicada: ${file}`);              
+      29 +    } catch (err) {                                            
+      30 +      await client.query('ROLLBACK');                          
+      31 +      throw err;                                               
+      32 +    } finally {                                                
+      33 +      client.release();                                        
+      34 +    }                                                          
+      35 +  }                                                            
+      36 +}                                                              
+      37 +                                                               
+      38 +module.exports = { migrate };                                  
+  ⎿  … 3 more files changed
+
+⏺ Ahora los tests y el lockfile.
+
+⏺ Bash(cat > test/helpers.js <<'EOF'
+      // Spec §10: los tests usan la BD reservas_test, que se borra y recrea…)
+  ⎿  Updated api/package-lock.json (+143 -0)
+       8        "name": "reservas-api",
+       9        "version": "1.0.0",
+      10        "dependencies": {
+      11 +        "bcryptjs": "3.0.3",                                   
+      12          "express": "5.3.0",
+      13 +        "jsonwebtoken": "9.0.3",                               
+      14          "pg": "8.23.1"
+      15        },
+      16        "devDependencies": {
+     ...
+      67        "dev": true,
+      68        "license": "MIT"
+      69      },
+      70 +    "node_modules/bcryptjs": {                                 
+      71 +      "version": "3.0.3",                                      
+      72 +      "resolved": "https://registry.npmjs.org/bcryptjs/-/bcrypt
+         +js-3.0.3.tgz",                                                 
+      73 +      "integrity": "sha512-GlF5wPWnSa/X5LKM1o0wz0suXIINz1iHRLvT
+         +S+sLyi7XPbe5ycmYI3DlZqVGZZtDgl4DmasFg7gOB3JYbphV5g==",         
+      74 +      "license": "BSD-3-Clause",                               
+      75 +      "bin": {                                                 
+      76 +        "bcrypt": "bin/bcrypt"                                 
+      77 +      }                                                        
+      78 +    },                                                         
+      79      "node_modules/body-parser": {
+      80        "version": "2.4.0",
+      81        "resolved": "https://registry.npmjs.org/body-parser/-/bod
+          y-parser-2.4.0.tgz",
+     ...
+      100          "url": "https://opencollective.com/express"
+      101        }
+      102      },
+      103 +    "node_modules/buffer-equal-constant-time": {              
+      104 +      "version": "1.0.1",                                     
+      105 +      "resolved": "https://registry.npmjs.org/buffer-equal-con
+          +stant-time/-/buffer-equal-constant-time-1.0.1.tgz",           
+      106 +      "integrity": "sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07O
+          +Ix0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA==",       
+      107 +      "license": "BSD-3-Clause"                               
+      108 +    },                                                        
+      109      "node_modules/bytes": {
+      110        "version": "3.1.2",
+      111        "resolved": "https://registry.npmjs.org/bytes/-/bytes-3.
+           1.2.tgz",
+     ...
+      279          "node": ">= 0.4"
+      280        }
+      281      },
+      282 +    "node_modules/ecdsa-sig-formatter": {                     
+     … 146 more lines (ctrl+o to expand)
+  ⎿  Created api/test/auth.test.js (+129 -0)
+        1 +const { test, before, after } = require('node:test');         
+        2 +const assert = require('node:assert');                        
+        3 +const request = require('supertest');                         
+        4 +const express = require('express');                           
+        5 +const jwt = require('jsonwebtoken');                          
+        6 +const { setupTestDb } = require('./helpers');                 
+        7 +                                                              
+        8 +let app;                                                      
+        9 +let pool;                                                     
+       10 +                                                              
+       11 +before(async () => {                                          
+       12 +  ({ app, pool } = await setupTestDb());                      
+       13 +});                                                           
+       14 +after(() => pool.end());                                      
+       15 +                                                              
+       16 +function login(email, password) {                             
+       17 +  return request(app).post('/api/auth/login').send({ email, pa
+          +ssword });                                                    
+       18 +}                                                             
+       19 +                                                              
+       20 +test('login correcto devuelve 200, token y user sin password_h
+          +ash', async () => {                                           
+       21 +  const res = await login('ana@empresa.local', 'Empleado2026!'
+          +);                                                            
+       22 +  assert.strictEqual(res.status, 200);                        
+       23 +  assert.ok(typeof res.body.token === 'string' && res.body.tok
+          +en.length > 0);                                               
+       24 +  assert.deepStrictEqual(Object.keys(res.body.user).sort(), ['
+          +email', 'id', 'name', 'role']);                               
+       25 +  assert.strictEqual(res.body.user.email, 'ana@empresa.local')
+          +;                                                             
+       26 +  assert.strictEqual(res.body.user.name, 'Ana López');        
+       27 +  assert.strictEqual(res.body.user.role, 'employee');         
+       28 +                                                              
+       29 +  const payload = jwt.decode(res.body.token, { complete: true 
+          +});                                                           
+       30 +  assert.strictEqual(payload.header.alg, 'HS256');            
+       31 +  assert.strictEqual(payload.payload.sub, res.body.user.id);  
+       32 +  assert.strictEqual(payload.payload.role, 'employee');       
+       33 +  assert.strictEqual(payload.payload.exp - payload.payload.iat
+          +, 8 * 3600);                                                  
+       34 +});                                                           
+       35 +                                                              
+       36 +test('login del admin devuelve role admin', async () => {     
+       37 +  const res = await login('rrhh@empresa.local', 'Rrhh2026!'); 
+       38 +  assert.strictEqual(res.status, 200);                        
+       39 +  assert.strictEqual(res.body.user.role, 'admin');            
+       40 +});                                                           
+     … 89 more lines (ctrl+o to expand)
+  ⎿  Updated api/test/health.test.js (+9 -4)
+       1 -const { test, after } = require('node:test');                  
+       1 +const { test, before, after } = require('node:test');          
+       2  const assert = require('node:assert');
+       3  const request = require('supertest');
+       4 -const { createApp } = require('../src/app');                   
+       5 -const { pool } = require('../src/db');                         
+       4 +const { setupTestDb } = require('./helpers');                  
+       5  
+       6 +let app;                                                       
+       7 +let pool;                                                      
+       8 +                                                               
+       9 +before(async () => {                                           
+      10 +  ({ app, pool } = await setupTestDb());                       
+      11 +});                                                            
+      12  after(() => pool.end());
+      13  
+      14  test('GET /api/health responde 200 con la BD disponible', async
+           () => {
+      10 -  const res = await request(createApp()).get('/api/health');   
+      15 +  const res = await request(app).get('/api/health');           
+      16    assert.strictEqual(res.status, 200);
+      17    assert.deepStrictEqual(res.body, { status: 'ok', db: 'ok' });
+      18  });
+  ⎿  Created api/test/helpers.js (+35 -0)
+       1 +// Spec §10: los tests usan la BD reservas_test, que se borra y
+         + recrea                                                        
+       2 +// (conectándose a la BD `postgres` del mismo servidor), se mig
+         +ra y se siembra.                                               
+       3 +// Nunca tocan la BD `reservas` de la demo.                    
+       4 +const { Client } = require('pg');                              
+       5 +                                                               
+       6 +const TEST_DB = 'reservas_test';                               
+       7 +const baseUrl = new URL(process.env.DATABASE_URL);             
+       8 +const adminUrl = new URL(baseUrl);                             
+       9 +adminUrl.pathname = '/postgres';                               
+      10 +const testUrl = new URL(baseUrl);                              
+      11 +testUrl.pathname = `/${TEST_DB}`;                              
+      12 +                                                               
+      13 +// Debe ocurrir antes de cargar src/db, que crea el pool desde 
+         +DATABASE_URL.                                                  
+      14 +process.env.DATABASE_URL = testUrl.toString();                 
+      15 +                                                               
+      16 +async function setupTestDb() {                                 
+      17 +  const admin = new Client({ connectionString: adminUrl.toStrin
+         +g() });                                                        
+      18 +  await admin.connect();                                       
+      19 +  try {                                                        
+      20 +    await admin.query(`DROP DATABASE IF EXISTS ${TEST_DB} WITH 
+         +(FORCE)`);                                                     
+      21 +    await admin.query(`CREATE DATABASE ${TEST_DB}`);           
+      22 +  } finally {                                                  
+      23 +    await admin.end();                                         
+      24 +  }                                                            
+      25 +                                                               
+      26 +  const { pool } = require('../src/db');                       
+      27 +  const { migrate } = require('../src/migrate');               
+      28 +  const { seed } = require('../src/seed');                     
+      29 +  const { createApp } = require('../src/app');                 
+      30 +  await migrate(pool);                                         
+      31 +  await seed(pool);                                            
+      32 +  return { app: createApp(), pool };                           
+      33 +}                                                              
+      34 +                                                               
+      35 +module.exports = { setupTestDb };                              
+
+⏺ Código listo. Paso a verificar desde cero.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Criterios 1 a 3 en verde, y al reiniciar no se vuelve a migrar ni a sembrar.
+  Ahora los tests y el curl.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ La primera ejecución pasó 11/11. En la segunda, mi grep no encontró nada
+  porque la salida va en formato TAP (#), así que la repito. También corro el
+  smoke e2e para descartar regresiones.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Todo pasa. Hago el registro de cierre.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(docs/tareas/T2-bd-auth.md)
+  ⎿  Wrote 64 lines to docs/tareas/T2-bd-auth.md
+       1 # T2 · Base de datos, migraciones, seed y autenticación
+       2
+       3 - **Sesión:** S2 · **Fecha:** 2026-11-15 · **Inicio–fin:** ~17:2
+         4–17:30
+       4 - **Agente:** Claude Code + Opus 5.5
+       5 - **Sesión exportada:** `docs/sesiones/S2-t2-bd-auth.txt`
+       6
+       7 ## Qué se pidió
+       8 T2 de `02-backlog.md`: que exista el modelo de datos completo co
+         n la restricción anti-choque, que se apliquen migraciones y seed
+     … +57 lines (~4 KB) (ctrl+o to expand)
+
+⏺ Bash(cat >> docs/03-bitacora.md <<'EOF'
+      - **~17:28** · S2 · Código de T2 escrito: migración literal del §6.1
+      (extraída del spec), `migrate`, `time` (mínimo para el s…)
+  ⎿  Updated docs/03-bitacora.md (+2 -0)
+      24  
+      25  - **2026-11-15 ~17:24** · S2 · Al iniciar, el export de S1 se m
+          ueve a `docs/sesiones/` y se commitea solo. El agente presenta 
+          el plan de T2 con dos dudas: archivos de test en paralelo contr
+          a `reservas_test` y textos de `message` de la API.
+      26  - **17:27** · S2 · OK del responsable: los tests corren en seri
+          e (D-34, `--test-concurrency=1`) y el agente decide los mensaje
+          s, que quedan fijados en el spec §7 para que la reconstrucción 
+          use los mismos (D-35). Se actualizan decisiones, spec y backlog
+           antes del código.
+      27 +- **~17:28** · S2 · Código de T2 escrito: migración literal del
+         + §6.1 (extraída del spec), `migrate`, `time` (mínimo para el se
+         +ed), `seed`, `auth` y `routes/auth`, `helpers.js` con `reservas
+         +_test` y `auth.test.js`. Lockfile regenerado en `node:22-alpine
+         +` con `bcryptjs@3.0.3` y `jsonwebtoken@9.0.3`.                 
+      28 +- **17:30** · S2 · Verificación tras `down -v` + `up -d --build
+         +`: servicios `healthy`, `bookings_no_overlap` presente, seed 4/
+         +5/1 con la demo el 2026-11-16 16:00–17:00 UTC, reiniciar `api` 
+         +no duplica ni re-migra, `npm test` 11/11 tres veces, `curl` de 
+         +login y `/me` correctos, smoke e2e `1 passed`. Registro en `doc
+         +s/tareas/T2-bd-auth.md` y commit local de T2.                  
+
+⏺ T2 está terminada y verificada, y ya tiene su commit local (68b7bbd, sin
+  push). Pasan los 5 criterios de aceptación y el DoD.
+
+  Tus dos respuestas
+  - Tests en serie: el script es ahora node --test --test-concurrency=1
+    "test/**/*.test.js". Queda como D-34 y en el backlog.
+  - Mensajes de error: están en una nueva columna "Mensaje" de la tabla de
+    errores del spec §7 (D-35), así que la reconstrucción usará los mismos
+    textos.
+    - Fijados ya: INVALID_CREDENTIALS, UNAUTHORIZED, FORBIDDEN, VALIDATION_ERROR
+      (login y JSON mal formado), NOT_FOUND, BOOKING_CONFLICT e INTERNAL_ERROR.
+    - Los de reservas y salas (INVALID_SLOT, IN_PAST, ROOM_INACTIVE…) dicen "Se
+      fija en T3/T5". Los escribiré en el spec cuando hagamos esas tareas.
+
+  Verificación (con down -v + up -d --build previo)
+  - db, api y web quedan healthy, y \d bookings muestra la restricción
+    bookings_no_overlap.
+  - El seed crea 4 usuarios, 5 salas y 1 reserva demo: Sala 1, Ana López, lunes
+    2026-11-16 de 16:00 a 17:00 UTC (10:00–11:00 hora local).
+  - Reiniciar api no duplica datos ni vuelve a migrar: schema_migrations sigue
+    con 1 fila.
+  - docker compose exec api npm test pasa 11 de 11 tres veces seguidas, y la BD
+    de la demo no se toca.
+  - El curl de login como Ana devuelve el token y el usuario sin password_hash.
+    /me, la contraseña incorrecta y la llamada sin token responden con el código
+    y mensaje del spec.
+  - El smoke e2e sigue pasando (1 passed). Lo corrí solo para descartar
+    regresiones, porque T2 no toca la UI.
+
+  El SQL de la migración lo saqué tal cual del bloque del §6.1, sin teclearlo a
+  mano. El registro está en docs/tareas/T2-bd-auth.md y en la bitácora.
+
+  Te toca exportar la sesión (/export) y guardarla como
+  docs/sesiones/S2-t2-bd-auth.txt. Al empezar T3 la commiteo yo.
