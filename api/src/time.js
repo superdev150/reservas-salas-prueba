@@ -1,6 +1,6 @@
-// Conversión hora local de la oficina ↔ UTC (spec §4, D-09).
-// T2 solo necesita "hoy", "próximo día hábil" y "hora local → UTC" para el seed;
-// las validaciones R2–R6 se añaden en T3.
+// Conversión hora local de la oficina ↔ UTC y reglas de calendario R2–R6 (spec §4, D-09).
+// Toda la lógica de zona horaria vive en este módulo.
+const { AppError } = require('./errors');
 
 const TIMEZONE = process.env.APP_TIMEZONE || 'America/Tegucigalpa';
 
@@ -61,4 +61,84 @@ function nextBusinessDay(date = todayLocal()) {
   return next;
 }
 
-module.exports = { TIMEZONE, localToUtc, todayLocal, addDays, weekday, nextBusinessDay };
+// Date (UTC) → { date: 'YYYY-MM-DD', time: 'HH:mm' } en hora local.
+function utcToLocal(instant) {
+  const p = localParts(instant);
+  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
+}
+
+// Formato (400, D-38): fecha real 'YYYY-MM-DD'.
+function isValidDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [y, m, d] = value.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+// Formato (400, D-38): 'HH:mm' con 00–23 y 00–59.
+function isValidTime(value) {
+  return typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+}
+
+function toMinutes(time) {
+  const [hh, mm] = time.split(':').map(Number);
+  return hh * 60 + mm;
+}
+
+const SLOT_MINUTES = 15;
+const MIN_DURATION = 15;
+const MAX_DURATION = 240;
+const OPEN_MINUTES = 8 * 60;
+const CLOSE_MINUTES = 20 * 60;
+const MAX_DAYS_AHEAD = 30;
+
+const MESSAGES = {
+  INVALID_SLOT: 'El horario debe ir en tramos de 15 minutos y durar entre 15 minutos y 4 horas.',
+  OUTSIDE_BUSINESS_HOURS: 'Solo se puede reservar de lunes a viernes entre 08:00 y 20:00.',
+  IN_PAST: 'No se puede reservar en el pasado.',
+  TOO_FAR_AHEAD: 'Solo se puede reservar hasta 30 días por adelantado.',
+};
+
+function fail(code) {
+  throw new AppError(422, code, MESSAGES[code]);
+}
+
+// Reglas R2–R6 en hora local (el formato ya está validado). Devuelve el intervalo en UTC.
+// No comprueba solapamientos: eso es R1 y lo decide PostgreSQL (D-05).
+function validateSlot(date, startTime, endTime, now = new Date()) {
+  const start = toMinutes(startTime);
+  const end = toMinutes(endTime);
+
+  // R2: múltiplos de 15 min.
+  if (start % SLOT_MINUTES !== 0 || end % SLOT_MINUTES !== 0) fail('INVALID_SLOT');
+  // R3: duración 15–240 min (fin ≤ inicio también es INVALID_SLOT, D-38).
+  const duration = end - start;
+  if (duration < MIN_DURATION || duration > MAX_DURATION) fail('INVALID_SLOT');
+  // R4: lunes–viernes, 08:00–20:00, mismo día (garantizado: una sola `date`).
+  const day = weekday(date);
+  if (day === 0 || day === 6 || start < OPEN_MINUTES || end > CLOSE_MINUTES) {
+    fail('OUTSIDE_BUSINESS_HOURS');
+  }
+
+  const startsAt = localToUtc(date, startTime);
+  const endsAt = localToUtc(date, endTime);
+  // R5: inicio posterior a ahora.
+  if (startsAt.getTime() <= now.getTime()) fail('IN_PAST');
+  // R6: fecha de inicio ≤ hoy + 30 días (inclusive, D-37).
+  if (date > addDays(todayLocal(now), MAX_DAYS_AHEAD)) fail('TOO_FAR_AHEAD');
+
+  return { startsAt, endsAt };
+}
+
+module.exports = {
+  TIMEZONE,
+  localToUtc,
+  utcToLocal,
+  todayLocal,
+  addDays,
+  weekday,
+  nextBusinessDay,
+  isValidDate,
+  isValidTime,
+  validateSlot,
+};

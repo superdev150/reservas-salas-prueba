@@ -109,7 +109,7 @@ api/
     routes/health.js  routes/auth.js  routes/rooms.js  routes/bookings.js
   test/
     helpers.js             # crea BD reservas_test limpia, migra, siembra, devuelve app
-    auth.test.js  rooms.test.js  bookings.test.js  concurrency.test.js  room-lock.test.js
+    auth.test.js  rooms.test.js  bookings.test.js  concurrency.test.js  concurrency-control.test.js  room-lock.test.js
 web/
   Dockerfile               # multi-stage: node build → nginx
   .dockerignore
@@ -240,19 +240,19 @@ Base `/api`. JSON en request y response. Autenticación con cabecera `Authorizat
 
 | Código | HTTP | Cuándo | Mensaje (`message`, D-35) |
 |---|---|---|---|
-| `VALIDATION_ERROR` | 400 | Cuerpo/parámetros con formato inválido o faltantes | Login sin correo/contraseña válidos: "Correo y contraseña son obligatorios." · JSON mal formado: "El cuerpo de la petición no es JSON válido." · Resto: se fija en T3/T5 |
+| `VALIDATION_ERROR` | 400 | Cuerpo/parámetros con formato inválido o faltantes | Login sin correo/contraseña válidos: "Correo y contraseña son obligatorios." · JSON mal formado: "El cuerpo de la petición no es JSON válido." · Reservas (`POST` y `GET ?date`, D-38): "Datos de la reserva no válidos." · Salas: se fija en T5 |
 | `UNAUTHORIZED` | 401 | Sin token, token inválido o expirado | "Sesión no válida o expirada." |
 | `INVALID_CREDENTIALS` | 401 | Login con correo o contraseña incorrectos (mismo mensaje en ambos casos) | "Correo o contraseña incorrectos." |
 | `FORBIDDEN` | 403 | Rol insuficiente o reserva ajena | "No tienes permiso para esta acción." |
 | `NOT_FOUND` | 404 | Recurso inexistente | "Recurso no encontrado." |
 | `BOOKING_CONFLICT` | 409 | R1 | "La sala ya está reservada en ese horario." |
-| `ROOM_NAME_TAKEN` | 409 | R13 | Se fija en T3/T5 |
-| `BOOKING_NOT_CANCELLABLE` | 409 | R10 | Se fija en T3/T5 |
-| `INVALID_SLOT` | 422 | R2, R3 | Se fija en T3/T5 |
-| `OUTSIDE_BUSINESS_HOURS` | 422 | R4 | Se fija en T3/T5 |
-| `IN_PAST` | 422 | R5 | Se fija en T3/T5 |
-| `TOO_FAR_AHEAD` | 422 | R6 | Se fija en T3/T5 |
-| `ROOM_INACTIVE` | 422 | R7 | Se fija en T3/T5 |
+| `ROOM_NAME_TAKEN` | 409 | R13 | Se fija en T5 |
+| `BOOKING_NOT_CANCELLABLE` | 409 | R10 | "Esta reserva ya no se puede cancelar." |
+| `INVALID_SLOT` | 422 | R2, R3 | "El horario debe ir en tramos de 15 minutos y durar entre 15 minutos y 4 horas." |
+| `OUTSIDE_BUSINESS_HOURS` | 422 | R4 | "Solo se puede reservar de lunes a viernes entre 08:00 y 20:00." |
+| `IN_PAST` | 422 | R5 | "No se puede reservar en el pasado." |
+| `TOO_FAR_AHEAD` | 422 | R6 | "Solo se puede reservar hasta 30 días por adelantado." (hasta hoy + 30 días inclusive, D-37) |
+| `ROOM_INACTIVE` | 422 | R7 | "La sala no está disponible." |
 | `INTERNAL_ERROR` | 500 | Cualquier otro (sin filtrar detalles internos) | "Error interno del servidor." |
 
 ### 7.1 Representaciones
@@ -301,6 +301,7 @@ Base `/api`. JSON en request y response. Autenticación con cabecera `Authorizat
 
 - La garantía es R1 en BD. El INSERT es una sola sentencia; PostgreSQL serializa el chequeo de la restricción, así que de N inserciones simultáneas que se solapan, **exactamente una** tiene éxito.
 - **Test obligatorio** (`api/test/concurrency.test.js`): lanzar con `Promise.all` **20** `POST /api/bookings` idénticos (mismo usuario, sala y horario) contra la BD real → exactamente 1 respuesta 201, 19 respuestas 409 `BOOKING_CONFLICT`, y `SELECT count(*)` de reservas activas de ese horario = 1. Segundo caso: 20 peticiones de **distintos horarios solapados parcialmente** (p. ej. inicios escalonados de 15 min con 60 min de duración) → en BD no existe ningún par solapado (verificado con un self-join).
+- **Control negativo** (`api/test/concurrency-control.test.js`, D-41, en archivo propio): borra `bookings_no_overlap` en `reservas_test` y repite las 20 peticiones idénticas → todas 201. Demuestra que no hay otra comprobación en el código: el único origen del 409 es la restricción.
 - El pool de `pg` debe tener al menos 10 conexiones para que la concurrencia sea real.
 
 ### 8.1 Carrera "desactivar sala" vs "crear reserva" (R12, D-26)
