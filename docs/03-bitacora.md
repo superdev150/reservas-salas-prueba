@@ -51,3 +51,20 @@ Registro con hora (America/Tegucigalpa) de todo lo ocurrido. Solo se añaden ent
 - **~18:38** · S5 · e2e: un primer fallo de selector del propio test (la celda de las 10:00 de Sala 1 está tapada por la demo). En las capturas, una línea de la tabla de salas aparece cortada; se corrige el CSS. Después, 9 passed varias veces seguidas.
 - **18:41** · S5 · Verificación tras `down -v` + `up -d --build`: servicios `healthy`, migraciones 001 y 002, `npm test` 59/59 ×3, e2e 9 passed, contratos con `curl`. Revisión del README frase por frase contra la app: se corrigen los pasos de "Probar el choque" (la celda de las 10:00 no se puede pulsar), el tamaño de la imagen de Playwright y la versión de Compose; se añaden la sección de administración de salas, el aviso de que el e2e modifica la demo y la base `reservas_test_control`. Los pasos nuevos se recorren con un script de Playwright que solo usa textos visibles: 2 passed.
 - **18:43** · S5 · Prueba de clon limpio sobre el commit de T5: `git clone` a una carpeta temporal y `up -d --build` → `healthy`, seed 4/5/1, migraciones 001 y 002, `npm test` 59/59, e2e 9 passed, captura del choque revisada. Clon desmontado y stack principal levantado de nuevo. Se completa `docs/tareas/T5-admin-salas.md` y se enmienda el commit local de T5 con esta evidencia.
+
+## S6 · Cierre (Claude Code, Opus 5.5)
+
+- **2026-11-15 ~18:55** · S6 · Al iniciar, el export de S5 se mueve a `docs/sesiones/` y se commitea solo (`2d3d16a`). El agente presenta el plan de cierre con 3 dudas.
+- **~19:00** · S6 · OK del responsable con estas respuestas:
+  - la prueba de clon limpio se repite sobre la versión final;
+  - se incluyen los puntos extra A (supuestos técnicos sin probar en S0) y B (regla de proceso en la memoria local), después de los suyos;
+  - solo bitácora y commit, sin documento en `docs/tareas/`.
+
+  El responsable fija los tres primeros fallos del plan: el README sin comprobar hasta T5, el aislamiento de pruebas sin decidir y los estados de pantalla sin pensar. Todos tienen la misma causa: se debían decidir en S0. En "Qué no quedó" solo va la reconstrucción, que hará el equipo revisor.
+- **19:09** · S6 · Prueba de clon limpio sobre `2d3d16a`:
+  - `up -d --build` → 3 servicios `healthy`;
+  - seed 4/5/1, migraciones 001 y 002, `bookings_no_overlap` presente;
+  - `npm test` 59/59 y e2e `9 passed`;
+  - capturas del choque, del día no hábil y de la sala desactivada revisadas.
+
+  Después se desmonta el clon y se vuelve a levantar el stack principal. Se completa `docs/04-cierre.md` (DoD con evidencia, qué quedó, qué no, 5 fallos del plan y qué cambiaría) y se hace el commit local de S6.
