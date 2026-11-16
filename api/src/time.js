@@ -130,6 +130,41 @@ function validateSlot(date, startTime, endTime, now = new Date()) {
   return { startsAt, endsAt };
 }
 
+function fromMinutes(minutes) {
+  const hh = String(Math.floor(minutes / 60)).padStart(2, '0');
+  const mm = String(minutes % 60).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function isWeekend(date) {
+  const day = weekday(date);
+  return day === 0 || day === 6;
+}
+
+// GET /api/calendar (D-43): qué día abre la agenda y desde qué hora se puede reservar.
+// `date` ya está validada. Mismas reglas que validateSlot (R4–R6), sin que el frontend calcule nada.
+function calendarInfo(date, now = new Date()) {
+  const today = todayLocal(now);
+  const defaultDate = isWeekend(today) ? nextBusinessDay(today) : today;
+  const day = date || defaultDate;
+  const info = { today, defaultDate, date: day, dayStatus: 'ok', bookableFrom: null };
+
+  if (day < today) info.dayStatus = 'past';
+  else if (isWeekend(day)) info.dayStatus = 'weekend';
+  else if (day > addDays(today, MAX_DAYS_AHEAD)) info.dayStatus = 'too_far';
+  else if (day === today) {
+    // R5: primer tramo de 15 min estrictamente posterior a ahora, nunca antes de las 08:00.
+    const local = utcToLocal(now);
+    const nowMinutes = toMinutes(local.time);
+    const first = Math.max(OPEN_MINUTES, (Math.floor(nowMinutes / SLOT_MINUTES) + 1) * SLOT_MINUTES);
+    if (first + MIN_DURATION > CLOSE_MINUTES) info.dayStatus = 'no_time_left';
+    else info.bookableFrom = fromMinutes(first);
+  } else {
+    info.bookableFrom = fromMinutes(OPEN_MINUTES);
+  }
+  return info;
+}
+
 module.exports = {
   TIMEZONE,
   localToUtc,
@@ -141,4 +176,5 @@ module.exports = {
   isValidDate,
   isValidTime,
   validateSlot,
+  calendarInfo,
 };

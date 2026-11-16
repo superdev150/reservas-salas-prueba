@@ -3,6 +3,7 @@ const healthRouter = require('./routes/health');
 const authRouter = require('./routes/auth');
 const roomsRouter = require('./routes/rooms');
 const bookingsRouter = require('./routes/bookings');
+const calendarRouter = require('./routes/calendar');
 const { notFoundHandler, errorHandler } = require('./errors');
 
 function createApp() {
@@ -13,6 +14,7 @@ function createApp() {
   app.use('/api/auth', authRouter);
   app.use('/api/rooms', roomsRouter);
   app.use('/api/bookings', bookingsRouter);
+  app.use('/api/calendar', calendarRouter);
 
   app.use('/api', notFoundHandler);
   app.use(errorHandler);

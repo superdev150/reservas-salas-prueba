@@ -109,6 +109,7 @@ Total estimado: unos 45 min de S0 + 2 h 50 min de ejecución y cierre.
 - **Dependencias:** T3.
 - **Spec:** §3, §7.1, §7.3 (frontend), §9 (todas menos `/admin/salas`), §9.1, §10.1 `empleado.spec.js`.
 - **Alcance:**
+  - API: `GET /api/calendar` (`routes/calendar.js`, cálculo en `time.js`) y `test/calendar.test.js` (D-43).
   - `web/src/api.js` (fetch con token y manejo de 401), `auth.jsx` (contexto de sesión), rutas protegidas.
   - Páginas `Login`, `Agenda` (rejilla + formulario + cancelar propia), `MisReservas`; cabecera; `api-status` en el pie de página.
   - `e2e/tests/empleado.spec.js` con capturas `results/empleado-*.png`; actualizar `smoke.spec.js` si cambia la página inicial.

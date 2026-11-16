@@ -106,16 +106,16 @@ api/
     time.js                # conversión hora local ↔ UTC y reglas de calendario
     auth.js                # login, JWT, middlewares requireAuth / requireAdmin
     errors.js              # clase AppError y middleware de errores
-    routes/health.js  routes/auth.js  routes/rooms.js  routes/bookings.js
+    routes/health.js  routes/auth.js  routes/rooms.js  routes/bookings.js  routes/calendar.js
   test/
     helpers.js             # crea BD reservas_test limpia, migra, siembra, devuelve app
-    auth.test.js  rooms.test.js  bookings.test.js  concurrency.test.js  concurrency-control.test.js  room-lock.test.js
+    auth.test.js  rooms.test.js  bookings.test.js  calendar.test.js  concurrency.test.js  concurrency-control.test.js  room-lock.test.js
 web/
   Dockerfile               # multi-stage: node build → nginx
   .dockerignore
   nginx.conf
   package.json  package-lock.json  vite.config.js  index.html
-  src/ main.jsx  App.jsx  api.js  auth.jsx  pages/*.jsx  components/*.jsx  styles.css
+  src/ main.jsx  App.jsx  api.js  auth.jsx  slots.js  pages/*.jsx  components/*.jsx  styles.css
 e2e/
   Dockerfile               # FROM imagen playwright; npm ci; copia tests
   .dockerignore
@@ -286,6 +286,7 @@ Base `/api`. JSON en request y response. Autenticación con cabecera `Authorizat
 | `PATCH /api/rooms/:id` | admin | cualquiera de `{ name, capacity, location, isActive }` | 200 `{ room: Room, cancelledBookings: number }` (transacción con `FOR UPDATE` de la sala, §8.1) | 400, 401, 403, 404, 409 |
 | `GET /api/bookings?date=YYYY-MM-DD` | auth | `date` obligatorio | 200 `Booking[]` activas de ese día local (todas las salas), orden `startsAt` | 400, 401 |
 | `GET /api/bookings/mine` | auth | — | 200 `Booking[]` activas del usuario con `endsAt > now`, orden `startsAt` | 401 |
+| `GET /api/calendar?date=YYYY-MM-DD` | auth | `date` opcional (por defecto `defaultDate`) | 200 `{ "today": "2026-11-15", "defaultDate": "2026-11-16", "date": "2026-11-16", "dayStatus": "ok", "bookableFrom": "08:00" }`; `dayStatus` ∈ `past` · `weekend` · `too_far` · `no_time_left` · `ok` (en ese orden); `bookableFrom` = primer inicio reservable del día (`null` si `dayStatus ≠ ok`) (D-43) | 400, 401 |
 | `POST /api/bookings` | auth | `{ roomId, date: "YYYY-MM-DD", startTime: "HH:mm", endTime: "HH:mm", title }` (hora local) | 201 `Booking` | 400, 401, 404, 409 `BOOKING_CONFLICT`, 422 |
 | `DELETE /api/bookings/:id` | auth (dueño o admin) | — | 200 `Booking` con `status: "cancelled"` | 401, 403, 404, 409 `BOOKING_NOT_CANCELLABLE` |
 
@@ -346,7 +347,7 @@ Rutas del SPA (react-router-dom). Todas excepto `/login` requieren sesión.
 | Ruta | Quién | Contenido |
 |---|---|---|
 | `/login` | público | Formulario correo + contraseña. Error genérico "Correo o contraseña incorrectos". |
-| `/` → `/agenda` | todos | Selector de fecha (por defecto hoy; si es fin de semana, el próximo día hábil). Rejilla: una columna por sala activa, filas de 15 min de 08:00 a 20:00. Las reservas se dibujan como bloques que ocupan sus filas con título y nombre del dueño. Clic en celda libre abre el formulario precargado (sala, fecha, inicio, fin = inicio + 60 min recortado a 20:00). Clic en una reserva propia (o cualquiera si admin) muestra botón "Cancelar". |
+| `/` → `/agenda` | todos | Selector de fecha (por defecto `defaultDate` de `GET /api/calendar`: hoy; si es fin de semana, el próximo día hábil). Si `dayStatus ≠ ok`, aviso `agenda-notice` encima de la rejilla ("Este día ya pasó." · "Solo se puede reservar de lunes a viernes." · "Solo se puede reservar hasta 30 días por adelantado." · "Ya no quedan horas disponibles hoy.") y las celdas anteriores a `bookableFrom` (todas si es `null`) se ven deshabilitadas (D-44). Rejilla: una columna por sala activa, filas de 15 min de 08:00 a 20:00. Las reservas se dibujan como bloques que ocupan sus filas con título y nombre del dueño. Clic en celda libre habilitada abre el formulario en un modal (D-46), precargado (sala, fecha, inicio, fin = inicio + 60 min recortado a 20:00). Clic en una reserva propia (o cualquiera si admin) muestra botón "Cancelar" (pide confirmación, D-45). |
 | `/mis-reservas` | todos | Lista de mis reservas futuras con botón "Cancelar" (pide confirmación). |
 | `/admin/salas` | admin | Tabla de salas (incluidas inactivas), formulario crear, editar nombre/capacidad/ubicación, botón Activar/Desactivar (confirmación avisando que se cancelan las reservas futuras). Un employee que entra aquí es redirigido a `/agenda`. |
 
@@ -358,7 +359,7 @@ Rutas del SPA (react-router-dom). Todas excepto `/login` requieren sesión.
 
 ### 9.1 `data-testid` obligatorios (contrato con e2e)
 
-`api-status`, `login-email`, `login-password`, `login-submit`, `login-error`, `nav-agenda`, `nav-mis-reservas`, `nav-salas`, `logout`, `agenda-date`, `agenda-grid`, `slot-{roomId}-{HH:mm}` (celda), `booking-{id}` (bloque), `booking-form`, `booking-room`, `booking-start`, `booking-end`, `booking-title`, `booking-submit`, `booking-error`, `booking-cancel`, `mine-list`, `mine-item-{id}`, `mine-cancel-{id}`, `room-form`, `room-name`, `room-capacity`, `room-location`, `room-submit`, `room-row-{id}`, `room-toggle-{id}`.
+`api-status`, `login-email`, `login-password`, `login-submit`, `login-error`, `nav-agenda`, `nav-mis-reservas`, `nav-salas`, `logout`, `agenda-date`, `agenda-notice`, `agenda-grid`, `slot-{roomId}-{HH:mm}` (celda), `booking-{id}` (bloque), `booking-form`, `booking-room`, `booking-start`, `booking-end`, `booking-title`, `booking-submit`, `booking-error`, `booking-cancel`, `mine-list`, `mine-item-{id}`, `mine-cancel-{id}`, `room-form`, `room-name`, `room-capacity`, `room-location`, `room-submit`, `room-row-{id}`, `room-toggle-{id}`.
 
 ## 10. Pruebas
 
