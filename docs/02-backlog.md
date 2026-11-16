@@ -129,12 +129,14 @@ Total estimado: unos 45 min de S0 + 2 h 50 min de ejecución y cierre.
 - **Dependencias:** T4.
 - **Spec:** §2, §4 R7, R9, R12 y R13, §7.2 filas `rooms`, **§8.1 (completo)**, §9 `/admin/salas` y cancelación por admin en agenda, §9.1, §10.1 `admin.spec.js`.
 - **Alcance:**
+  - `migrations/002_rooms_name_ci.sql` (nombre de sala único sin distinguir mayúsculas, D-49).
   - `POST /api/rooms`, `PATCH /api/rooms/:id` (transacción con `SELECT ... FOR UPDATE` de la sala; desactivar cancela las futuras), `includeInactive` para admin.
   - Modificar `POST /api/bookings` para bloquear la sala con `SELECT ... FOR SHARE` dentro de su transacción, antes del INSERT (§8.1).
   - `test/rooms.test.js`: roles (employee → 403), nombre duplicado (409), desactivar cancela reservas futuras y devuelve `cancelledBookings`.
   - `test/room-lock.test.js`: los 3 escenarios del §8.1.
   - Página `/admin/salas`, enlace `nav-salas` solo admin, redirección de employee, botón cancelar en reservas ajenas para admin.
   - `e2e/tests/admin.spec.js` con capturas `results/admin-*.png`.
+  - `workers: 1` en `e2e/playwright.config.js`: los archivos e2e corren en serie porque empleado y admin usan a Luis (D-54).
   - Revisar que el README describe exactamente lo construido (puertos, usuarios, comandos).
 - **Fuera de alcance:** gestión de usuarios.
 - **Criterios de aceptación:**

@@ -73,8 +73,8 @@ export default function Agenda() {
     }
   }
   const columnOf = new Map(rooms.map((r, i) => [r.id, i + 2]));
-  // T4: solo reservas propias. La cancelación de reservas ajenas por el admin llega en T5.
-  const canCancel = (b) => b.userId === user.id;
+  // El dueño cancela las suyas; el admin, cualquiera (R9, spec §9).
+  const canCancel = (b) => b.userId === user.id || user.role === 'admin';
 
   function openForm(room, time) {
     setNewBooking({ roomId: String(room.id), date, startTime: time, endTime: defaultEnd(time) });

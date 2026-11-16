@@ -118,3 +118,17 @@ h2 { font-size: 1.15rem; margin: 0; }
   background: #fff; padding: 0.8rem 1rem; border-radius: 8px; border: 1px solid var(--line);
 }
 .mine-item div { display: flex; flex-direction: column; gap: 0.2rem; }
+
+/* Administración de salas */
+.success { margin: 0 0 1rem; padding: 0.6rem 0.8rem; border-radius: 6px; background: #e3f9e5; color: #1f6b2a; }
+.admin > .error { margin-bottom: 1rem; }
+.admin-layout { display: grid; grid-template-columns: minmax(16rem, 20rem) 1fr; gap: 1.5rem; align-items: start; }
+.admin-layout h2 { margin: 0; font-size: 1.1rem; }
+.form-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.rooms-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); overflow: hidden; }
+.rooms-table th, .rooms-table td { padding: 0.6rem 0.8rem; text-align: left; border-bottom: 1px solid var(--line); }
+.rooms-table th { font-size: 0.85rem; color: var(--muted); background: #f8f9fb; }
+.rooms-table tr:last-child td { border-bottom: none; }
+.room-inactive td { color: var(--muted); }
+.row-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+@media (max-width: 760px) { .admin-layout { grid-template-columns: 1fr; } }

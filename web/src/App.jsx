@@ -5,8 +5,9 @@ import Footer from './components/Footer.jsx';
 import Login from './pages/Login.jsx';
 import Agenda from './pages/Agenda.jsx';
 import MisReservas from './pages/MisReservas.jsx';
+import AdminSalas from './pages/AdminSalas.jsx';
 
-// Rutas del spec §9. Todas salvo /login requieren sesión. /admin/salas llega en T5.
+// Rutas del spec §9. Todas salvo /login requieren sesión; /admin/salas solo admin.
 function RequireAuth() {
   const { user, loading } = useAuth();
   if (loading) return <p className="loading">Cargando…</p>;
@@ -19,6 +20,13 @@ function RequireAuth() {
       </main>
     </>
   );
+}
+
+// Un employee que entra en /admin/salas acaba en /agenda (spec §9).
+function RequireAdmin() {
+  const { user } = useAuth();
+  if (user.role !== 'admin') return <Navigate to="/agenda" replace />;
+  return <Outlet />;
 }
 
 function PublicOnly({ children }) {
@@ -39,6 +47,9 @@ export default function App() {
               <Route path="/" element={<Navigate to="/agenda" replace />} />
               <Route path="/agenda" element={<Agenda />} />
               <Route path="/mis-reservas" element={<MisReservas />} />
+              <Route element={<RequireAdmin />}>
+                <Route path="/admin/salas" element={<AdminSalas />} />
+              </Route>
               <Route path="*" element={<Navigate to="/agenda" replace />} />
             </Route>
           </Routes>

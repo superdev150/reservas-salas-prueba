@@ -18,6 +18,9 @@ export default function Header() {
       <nav className="nav">
         <NavLink to="/agenda" data-testid="nav-agenda">Agenda</NavLink>
         <NavLink to="/mis-reservas" data-testid="nav-mis-reservas">Mis reservas</NavLink>
+        {user.role === 'admin' && (
+          <NavLink to="/admin/salas" data-testid="nav-salas">Salas</NavLink>
+        )}
       </nav>
       <span className="user">
         {user.name} · <span className="role">{ROLE_LABELS[user.role] || user.role}</span>

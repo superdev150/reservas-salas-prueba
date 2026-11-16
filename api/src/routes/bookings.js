@@ -100,8 +100,12 @@ router.post('/', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    // R7: la sala existe y está activa. (El bloqueo FOR SHARE del §8.1 se añade en T5.)
-    const room = await client.query('SELECT id, is_active FROM rooms WHERE id = $1', [roomId]);
+    // R7/R12 (spec §8.1): bloquea la fila de la sala con FOR SHARE antes del INSERT. Si RRHH
+    // la está desactivando (FOR UPDATE), esperamos y leemos is_active ya confirmado → 422.
+    // Protege "sala activa", no el solapamiento: eso lo decide la restricción en el INSERT.
+    const room = await client.query('SELECT id, is_active FROM rooms WHERE id = $1 FOR SHARE', [
+      roomId,
+    ]);
     if (room.rows.length === 0) throw notFound();
     if (!room.rows[0].is_active) {
       throw new AppError(422, 'ROOM_INACTIVE', 'La sala no está disponible.');

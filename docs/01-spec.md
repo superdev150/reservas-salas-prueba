@@ -54,7 +54,7 @@ Todas las horas se interpretan en la zona horaria de la oficina: **`America/Tegu
 | R10 | Solo se cancelan reservas activas cuyo inicio aún no ha llegado | API | 409 `BOOKING_NOT_CANCELLABLE` |
 | R11 | Cancelar no borra: cambia `status` a `cancelled` y libera el horario (la restricción solo aplica a `active`) | BD + API | — |
 | R12 | Desactivar una sala cancela en la misma transacción sus reservas activas futuras; no se borran salas. Nunca puede quedar una reserva activa futura en una sala inactiva, ni siquiera si alguien reserva mientras RRHH desactiva (bloqueo de fila, §8.1) | API (transacción + bloqueo de fila) | — |
-| R13 | Nombre de sala único | UNIQUE en BD | 409 `ROOM_NAME_TAKEN` |
+| R13 | Nombre de sala único, sin distinguir mayúsculas (D-49) | UNIQUE + índice único sobre `lower(name)` en BD | 409 `ROOM_NAME_TAKEN` |
 
 **Orden de validación al crear reserva:** 400 (formato) → 404/422 sala → 422 reglas R2–R6 → INSERT (la BD decide R1 → 409).
 No se hace "SELECT para ver si está libre" antes del INSERT como garantía: la garantía es la restricción (D-05). Ese tipo de comprobación previa está **prohibida** porque introduce la falsa sensación de control y una condición de carrera.
@@ -96,7 +96,7 @@ docker-compose.yml
 api/
   Dockerfile  .dockerignore
   package.json  package-lock.json
-  migrations/001_init.sql
+  migrations/001_init.sql  002_rooms_name_ci.sql
   src/
     index.js               # arranque: migrar → seed → escuchar
     app.js                 # crea la app Express (exportada para tests)
@@ -203,7 +203,12 @@ CREATE INDEX bookings_starts_at_idx ON bookings (starts_at);
 CREATE INDEX bookings_user_idx ON bookings (user_id, starts_at);
 ```
 
-La API traduce el error de PostgreSQL con `code = '23P01'` (exclusion_violation) y `constraint = 'bookings_no_overlap'` a **409 `BOOKING_CONFLICT`**, y `23505` sobre `rooms_name_key` a **409 `ROOM_NAME_TAKEN`**.
+**`migrations/002_rooms_name_ci.sql`** (literal, D-49): el nombre de sala es único sin distinguir mayúsculas ("Sala 1" y "sala 1" son la misma). El `001` no se modifica.
+```sql
+CREATE UNIQUE INDEX rooms_name_lower_key ON rooms (lower(name));
+```
+
+La API traduce el error de PostgreSQL con `code = '23P01'` (exclusion_violation) y `constraint = 'bookings_no_overlap'` a **409 `BOOKING_CONFLICT`**, y `23505` sobre `rooms_name_key` o `rooms_name_lower_key` a **409 `ROOM_NAME_TAKEN`**.
 
 ### 6.2 Seed (idempotente, en cada arranque)
 
@@ -240,13 +245,13 @@ Base `/api`. JSON en request y response. Autenticación con cabecera `Authorizat
 
 | Código | HTTP | Cuándo | Mensaje (`message`, D-35) |
 |---|---|---|---|
-| `VALIDATION_ERROR` | 400 | Cuerpo/parámetros con formato inválido o faltantes | Login sin correo/contraseña válidos: "Correo y contraseña son obligatorios." · JSON mal formado: "El cuerpo de la petición no es JSON válido." · Reservas (`POST` y `GET ?date`, D-38): "Datos de la reserva no válidos." · Salas: se fija en T5 |
+| `VALIDATION_ERROR` | 400 | Cuerpo/parámetros con formato inválido o faltantes | Login sin correo/contraseña válidos: "Correo y contraseña son obligatorios." · JSON mal formado: "El cuerpo de la petición no es JSON válido." · Reservas (`POST` y `GET ?date`, D-38): "Datos de la reserva no válidos." · Salas (`POST`/`PATCH`, D-48): "Datos de la sala no válidos." |
 | `UNAUTHORIZED` | 401 | Sin token, token inválido o expirado | "Sesión no válida o expirada." |
 | `INVALID_CREDENTIALS` | 401 | Login con correo o contraseña incorrectos (mismo mensaje en ambos casos) | "Correo o contraseña incorrectos." |
 | `FORBIDDEN` | 403 | Rol insuficiente o reserva ajena | "No tienes permiso para esta acción." |
 | `NOT_FOUND` | 404 | Recurso inexistente | "Recurso no encontrado." |
 | `BOOKING_CONFLICT` | 409 | R1 | "La sala ya está reservada en ese horario." |
-| `ROOM_NAME_TAKEN` | 409 | R13 | Se fija en T5 |
+| `ROOM_NAME_TAKEN` | 409 | R13 (sin distinguir mayúsculas, D-49) | "Ya existe una sala con ese nombre." |
 | `BOOKING_NOT_CANCELLABLE` | 409 | R10 | "Esta reserva ya no se puede cancelar." |
 | `INVALID_SLOT` | 422 | R2, R3 | "El horario debe ir en tramos de 15 minutos y durar entre 15 minutos y 4 horas." |
 | `OUTSIDE_BUSINESS_HOURS` | 422 | R4 | "Solo se puede reservar de lunes a viernes entre 08:00 y 20:00." |
@@ -283,7 +288,8 @@ Base `/api`. JSON en request y response. Autenticación con cabecera `Authorizat
 | `GET /api/auth/me` | auth | — | 200 `User` | 401 |
 | `GET /api/rooms` | auth | query `includeInactive=true` (solo admin; ignorado para employee) | 200 `Room[]` ordenadas por `name` | 401 |
 | `POST /api/rooms` | admin | `{ name, capacity, location? }` | 201 `Room` | 400, 401, 403, 409 `ROOM_NAME_TAKEN` |
-| `PATCH /api/rooms/:id` | admin | cualquiera de `{ name, capacity, location, isActive }` | 200 `{ room: Room, cancelledBookings: number }` (transacción con `FOR UPDATE` de la sala, §8.1) | 400, 401, 403, 404, 409 |
+| `PATCH /api/rooms/:id` | admin | cualquiera de `{ name, capacity, location, isActive }` (al menos uno) | 200 `{ room: Room, cancelledBookings: number }` (transacción con `FOR UPDATE` de la sala, §8.1) | 400, 401, 403, 404, 409 |
+| ↳ validación de salas (D-48, D-50) | | `name` texto, 1–60 caracteres recortado · `capacity` entero 1–100 · `location` texto ≤ 60 recortado o `null` (vacío → `null`) · `isActive` booleano · campo desconocido → 400. Orden: 401 → 403 → 404 (`:id` no numérico) → 400 → 404 (no existe) → 409. Reactivar (`isActive: true`) no recupera reservas canceladas (D-53) | | |
 | `GET /api/bookings?date=YYYY-MM-DD` | auth | `date` obligatorio | 200 `Booking[]` activas de ese día local (todas las salas), orden `startsAt` | 400, 401 |
 | `GET /api/bookings/mine` | auth | — | 200 `Booking[]` activas del usuario con `endsAt > now`, orden `startsAt` | 401 |
 | `GET /api/calendar?date=YYYY-MM-DD` | auth | `date` opcional (por defecto `defaultDate`) | 200 `{ "today": "2026-11-15", "defaultDate": "2026-11-16", "date": "2026-11-16", "dayStatus": "ok", "bookableFrom": "08:00" }`; `dayStatus` ∈ `past` · `weekend` · `too_far` · `no_time_left` · `ok` (en ese orden); `bookableFrom` = primer inicio reservable del día (`null` si `dayStatus ≠ ok`) (D-43) | 400, 401 |
@@ -349,7 +355,7 @@ Rutas del SPA (react-router-dom). Todas excepto `/login` requieren sesión.
 | `/login` | público | Formulario correo + contraseña. Error genérico "Correo o contraseña incorrectos". |
 | `/` → `/agenda` | todos | Selector de fecha (por defecto `defaultDate` de `GET /api/calendar`: hoy; si es fin de semana, el próximo día hábil). Si `dayStatus ≠ ok`, aviso `agenda-notice` encima de la rejilla ("Este día ya pasó." · "Solo se puede reservar de lunes a viernes." · "Solo se puede reservar hasta 30 días por adelantado." · "Ya no quedan horas disponibles hoy.") y las celdas anteriores a `bookableFrom` (todas si es `null`) se ven deshabilitadas (D-44). Rejilla: una columna por sala activa, filas de 15 min de 08:00 a 20:00. Las reservas se dibujan como bloques que ocupan sus filas con título y nombre del dueño. Clic en celda libre habilitada abre el formulario en un modal (D-46), precargado (sala, fecha, inicio, fin = inicio + 60 min recortado a 20:00). Clic en una reserva propia (o cualquiera si admin) muestra botón "Cancelar" (pide confirmación, D-45). |
 | `/mis-reservas` | todos | Lista de mis reservas futuras con botón "Cancelar" (pide confirmación). |
-| `/admin/salas` | admin | Tabla de salas (incluidas inactivas), formulario crear, editar nombre/capacidad/ubicación, botón Activar/Desactivar (confirmación avisando que se cancelan las reservas futuras). Un employee que entra aquí es redirigido a `/agenda`. |
+| `/admin/salas` | admin | Tabla de salas (incluidas inactivas), formulario crear, editar nombre/capacidad/ubicación, botón Activar/Desactivar (confirmación avisando que se cancelan las reservas futuras: "¿Desactivar «<nombre>»? Se cancelarán sus reservas futuras."; después "Sala desactivada. Reservas canceladas: N.", D-52). Editar reutiliza el formulario de crear (D-51). Un employee que entra aquí es redirigido a `/agenda`. |
 
 **Formulario de reserva:** sala (select), fecha, inicio y fin (selects de 15 min entre 08:00 y 20:00), título. Al recibir 409 muestra **"Esa sala ya está reservada en ese horario. Elige otro."** y refresca la agenda. Los 422 muestran `error.message` del servidor.
 

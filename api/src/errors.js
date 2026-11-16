@@ -22,6 +22,12 @@ function errorHandler(err, req, res, next) {
       error: { code: 'BOOKING_CONFLICT', message: 'La sala ya está reservada en ese horario.' },
     });
   }
+  // R13 (D-49): nombre de sala repetido, también sin distinguir mayúsculas. Lo decide la BD.
+  if (err.code === '23505' && ['rooms_name_key', 'rooms_name_lower_key'].includes(err.constraint)) {
+    return res.status(409).json({
+      error: { code: 'ROOM_NAME_TAKEN', message: 'Ya existe una sala con ese nombre.' },
+    });
+  }
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({
       error: { code: 'VALIDATION_ERROR', message: 'El cuerpo de la petición no es JSON válido.' },

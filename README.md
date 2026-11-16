@@ -16,9 +16,9 @@ En modo reconstrucción el agente no pregunta: si el spec no resuelve algo, elig
 
 ## Requisitos
 
-- Docker Desktop (o Docker Engine) con Docker Compose v2.
+- Docker Desktop (o Docker Engine) con Docker Compose v2 o superior (el comando `docker compose`, no `docker-compose`).
 - Puerto **8080** libre.
-- Conexión a internet la primera vez (descarga de imágenes; la de Playwright pesa ~2 GB y solo se usa para las pruebas de interfaz).
+- Conexión a internet la primera vez (descarga de imágenes; la de Playwright ocupa unos 3,7 GB en disco y solo se usa para las pruebas de interfaz).
 
 ## Cómo levantar
 
@@ -43,8 +43,18 @@ Para empezar desde cero (borra los datos): `docker compose down -v && docker com
 
 El seed deja una reserva de **Ana** en **Sala 1, el próximo día hábil, de 10:00 a 11:00**.
 1. Entra como `luis@empresa.local`.
-2. En la agenda elige el próximo día hábil e intenta reservar Sala 1 de 10:00 a 11:00 (o 10:30 a 11:30).
-3. Verás: *"Esa sala ya está reservada en ese horario. Elige otro."* De 11:00 a 12:00 sí se puede.
+2. En la agenda elige el próximo día hábil en el selector de fecha (en fin de semana la agenda ya abre en ese día). Verás el bloque de Ana en Sala 1 de 10:00 a 11:00.
+3. Haz clic en una celda libre de Sala 1 (por ejemplo, 09:00). En el formulario elige inicio 10:00 y fin 11:00 (o 10:30 y 11:30), escribe un título y pulsa **Reservar**.
+4. Verás: *"Esa sala ya está reservada en ese horario. Elige otro."* Si cambias a 11:00–12:00, la reserva sí se crea.
+
+### Administrar salas (RRHH)
+
+Entra como `rrhh@empresa.local`: en la cabecera aparece **Salas** (`/admin/salas`).
+- Crear y editar salas (nombre, capacidad de 1 a 100 y ubicación). El nombre es único sin distinguir mayúsculas: "Sala 1" y "sala 1" son la misma.
+- **Desactivar** una sala pide confirmación, cancela sus reservas futuras e indica cuántas canceló. La sala deja de aparecer en la agenda. **Activar** la vuelve a mostrar, pero las reservas canceladas no vuelven.
+- En la agenda, RRHH puede cancelar cualquier reserva; un empleado, solo las suyas.
+
+Un empleado no ve el enlace **Salas** y, si abre `/admin/salas`, vuelve a la agenda.
 
 ## Cómo probar
 
@@ -58,7 +68,9 @@ docker compose exec api npm test
 docker compose --profile e2e run --rm --build e2e
 ```
 
-Los tests de API usan una base aparte (`reservas_test`) y no tocan los datos de la demo. También prueban que una reserva hecha mientras RRHH desactiva una sala nunca queda activa en la sala inactiva (bloqueo de fila, `docs/01-spec.md` §8.1).
+Los tests de API usan bases aparte (`reservas_test` y, para el control negativo de concurrencia, `reservas_test_control`) y no tocan los datos de la demo. También prueban que una reserva hecha mientras RRHH desactiva una sala nunca queda activa en la sala inactiva (bloqueo de fila, `docs/01-spec.md` §8.1).
+
+Los tests de interfaz, en cambio, trabajan sobre la base de la demo, igual que una persona usando la aplicación. Antes de cada test cancelan las reservas futuras de Luis, y dejan salas desactivadas con nombres `Sala E2E …` y `Sala Edit …` (se ven en `/admin/salas`). La reserva demo de Ana no se toca. Para volver a los datos iniciales: `docker compose down -v && docker compose up`.
 
 ## Documentación
 
@@ -72,5 +84,5 @@ Los tests de API usan una base aparte (`reservas_test`) y no tocan los datos de 
 | `docs/04-cierre.md` | Reporte de cierre con la DoD y evidencias |
 | `docs/tareas/` | Un archivo por tarea con lo que hizo el agente |
 | `docs/sesiones/` | Conversaciones exportadas del agente |
-| `docs/reconstruccion/` | Notas del agente cuando reconstruye en modo reconstrucción (vacío en el desarrollo original) |
+| `docs/reconstruccion/` | Notas del agente cuando reconstruye en modo reconstrucción (en el desarrollo original solo contiene su `README.md`) |
 | `.claude/skills/verificar-ui/` | Skill para verificar la interfaz con Playwright en Docker |
