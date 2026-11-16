@@ -1,0 +1,1359 @@
+
+❯ Empezaremos la T5 Dame el plan corto y espera mi OK IMPORATNE para esta tarea
+  es que en la verificación final revisa el README contra lo que hace la app
+  de verdad.
+
+⏺ Primero guardo el export de la sesión anterior, como pide el paso 0, y luego
+  leo la documentación de T5.
+
+  Read 1 file, ran 3 shell commands (ctrl+o to expand)
+
+⏺ git mv -k se saltó el archivo sin decir nada porque no estaba versionado. Lo
+  muevo con mv normal:
+
+⏺ Bash(mv S4-t4-interfaz-empleado.txt docs/sesiones/ && git add
+      docs/sesiones/S4-t4-interfaz-empleado.txt && git commit -q -m "S4: export
+      de la sesión de T4 (interfaz…)
+  ⎿  2 files changed (binary, mode only or too large to show)
+  ⎿  (files that changed while this command ran, by the command or by
+     another process; a convenience view, not a review or audit of the
+     command)
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ La spec deja dos mensajes de error "para fijar en T5". Ahora leo las
+  decisiones, el README y el código actual.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Ya existe un rooms.test.js. Miro ese archivo, las piezas de la UI que T5
+  cambia y la nota de T4 por si quedó algo pendiente.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Export S4 guardado en docs/sesiones/ (commit 9c13578). Ya leí spec, backlog,
+  decisiones, README y el código actual. Este es el plan de T5.
+
+  Plan T5: administración de salas, bloqueo sala/reserva y cancelación por admin
+
+  API
+  1. api/src/routes/rooms.js: añadir POST / y PATCH /:id (solo admin). PATCH usa
+     una sola transacción para todo: BEGIN → SELECT … FOR UPDATE → UPDATE
+     rooms. Si isActive: false, también cancela las reservas activas futuras y
+     devuelve { room, cancelledBookings }. El cliente se libera con try/finally
+     (ROLLBACK y release).
+  2. api/src/routes/bookings.js: cambiar el SELECT de la sala por … FOR SHARE
+     (§8.1). Solo esa línea; no hay ninguna comprobación de solapamiento.
+  3. api/src/errors.js: traducir 23505 sobre rooms_name_key a 409
+     ROOM_NAME_TAKEN.
+  4. Tests:
+     - api/test/rooms.test.js, ampliado: employee → 403, validaciones → 400,
+       nombre duplicado → 409, desactivar cancela las futuras pero no las
+       pasadas y devuelve cancelledBookings, reactivar, 404.
+     - api/test/room-lock.test.js nuevo: los 3 escenarios del §8.1. Para saber
+       que una petición está bloqueada consulta pg_stat_activity
+       (wait_event_type = 'Lock'), sin esperas fijas. El estrés se repite 3
+       veces.
+
+  Web
+  5. web/src/pages/AdminSalas.jsx nuevo, con la tabla (incluidas las inactivas),
+  el formulario de crear y editar, y Activar/Desactivar con confirmación. La
+  ruta /admin/salas lleva un guardián que redirige a un employee a /agenda.
+  6. Header.jsx (web/src/components/Header.jsx): enlace nav-salas solo para
+  admin. En Agenda.jsx (web/src/pages/Agenda.jsx), canCancel también vale para
+  admin.
+  7. e2e/tests/admin.spec.js con el escenario del §10.1 y capturas
+  results/admin-*.png.
+
+  Verificación
+  - docker compose down -v && up -d --build, todo healthy. Después npm test 3
+    veces seguidas.
+  - Skill verificar-ui con la suite e2e completa, mirando las capturas.
+  - Clon limpio: paro el stack principal (por el puerto 8080), hago git clone en
+    el scratchpad, up -d --build, compruebo healthy, health, login y la demo, y
+    lo bajo con down -v.
+  - Revisión del README contra la app real, frase por frase:
+    - Ejecuto cada comando tal como está escrito, incluido docker compose up sin
+      -d.
+    - Compruebo los 4 usuarios con login real y el puerto 8080.
+    - Reproduzco "Probar el choque en 30 segundos" tal como está escrito,
+      mirando la captura.
+    - Compruebo que la base reservas_test existe y que la demo no se toca.
+    - Compruebo que cada archivo de la tabla de documentación existe y que la
+      instrucción de reconstrucción encaja con CLAUDE.md.
+    - Hoy el README no dice nada de la administración de salas. Propongo una
+      sección corta, "Administrar salas (RRHH)".
+    - Cada diferencia que encuentre se corrige en el README o en el código
+      (según cuál esté mal) y queda anotada en T5.md.
+  - Registro de cierre: docs/tareas/T5-admin-salas.md, bitácora, decisiones,
+    commit T5: … y recordatorio de /export.
+
+  Dudas abiertas. La spec no las resuelve. Para cada una propongo una opción;
+  dime si te vale o cuál cambias:
+  1. Mensaje de VALIDATION_ERROR en salas (la spec dice "se fija en T5"):
+     propongo "Datos de la sala no válidos." Las reglas serían:
+     - name: texto de 1 a 60 caracteres sin espacios sobrantes; se guarda
+       recortado.
+     - capacity: entero de 1 a 100.
+     - location: texto opcional o null; si llega vacío se guarda null. Propongo
+       un máximo de 60 caracteres.
+     - Un PATCH sin ningún campo válido, o con campos desconocidos, da 400.
+  2. Mensaje de ROOM_NAME_TAKEN: "Ya existe una sala con ese nombre." La
+     unicidad distingue mayúsculas, como hace el UNIQUE de la BD.
+  3. Orden de errores del PATCH: :id no numérico → 404, cuerpo inválido → 400,
+     sala inexistente (en el FOR UPDATE) → 404, nombre duplicado → 409.
+  4. Editar en la UI: propongo un botón "Editar" en cada fila que carga los
+     datos en el mismo room-form (título "Editar sala", botones "Guardar" y
+     "Cancelar edición"). Así no hacen falta data-testid nuevos.
+  5. Texto de la confirmación al desactivar: "¿Desactivar «Sala X»? Se
+     cancelarán sus reservas futuras." Después se muestra "Sala desactivada.
+     Reservas canceladas: N."
+  6. Reactivar: solo cambia is_active a true, sin confirmación, y las reservas
+     canceladas no vuelven.
+
+  Antes de escribir código, anoto estas decisiones en 00-decisiones.md y en la
+  spec §7. Espero tu OK.
+
+❯ OK al plan con las dudas: 1.si las validaciones evitan datos absurdos
+  2.prefiero que no distinga mayusculas para RRHH "Sala 1" y "sala 1" son la
+  misma 3.si va de lo general a lo concreto, como en reservas. 4.si reusar el
+  mismo formulario es mas simple 5.si avisar antes y dar el numero despues
+  evita una consulta previa solo para contar 6.si reactivar es reversible y no
+  hace daño y devolver reservas canceladas podria causar choques.
+
+⏺ Recibido. Antes de escribir código reviso el resto de los archivos que voy a
+  tocar.
+
+  Searched for 1 pattern, read 1 file, ran 1 shell command (ctrl+o to expand)
+
+⏺ Tengo ya el contexto: la duda 2 sobre mayúsculas se resuelve en la base de
+  datos, con un índice único sobre lower(name) en una nueva migración, porque
+  una comprobación previa en la API tendría la misma carrera. Primero anoto las
+  decisiones y luego actualizo la spec. · summary
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Ahora escribo las decisiones D-48 a D-53 en 00-decisiones.md:
+
+⏺ Bash(cat >> docs/00-decisiones.md <<'EOF'
+      | D-48 | 2026-11-15 | T5 | Validación de salas y mensaje de
+      `VALIDATION_ERROR` (pendiente desde D-35) | 400 `VALIDATION_ERR…)
+  ⎿  Updated docs/00-decisiones.md (+6 -0)
+      58  | D-45 | 2026-11-15 | T4 | El §9 solo pide confirmación al canc
+          elar desde "Mis reservas" | Al cancelar desde la agenda también
+           se pide confirmación (`window.confirm`, con el mismo texto que
+           en "Mis reservas") | Lo pidió el responsable: cancelar se comp
+          orta igual en las dos pantallas |
+      59  | D-46 | 2026-11-15 | T4 | ¿Dónde se abre el formulario de rese
+          rva? | En un modal encima de la agenda, con un botón "Cerrar". 
+          Solo se abre al hacer clic en una celda libre; no hay botón "Nu
+          eva reserva" | Lo pidió el responsable: con 48 filas, un formul
+          ario debajo de la rejilla no se ve al hacer clic en una celda d
+          e la tarde y parece que no pasó nada |
+      60  | D-47 | 2026-11-15 | T4 | Detalles de navegación no fijados en
+           el §9 | Entrar en `/login` con sesión activa redirige a `/agen
+          da`. El `api-status` está en el pie de página de todas las pant
+          allas, también en `/login`, así que `smoke.spec.js` sigue pasan
+          do sin cambios. La cabecera muestra el rol como "Empleado" o "A
+          dministrador" | Opción más simple, confirmada por el responsabl
+          e |
+      61 +| D-48 | 2026-11-15 | T5 | Validación de salas y mensaje de `VA
+         +LIDATION_ERROR` (pendiente desde D-35) | 400 `VALIDATION_ERROR`
+         + "Datos de la sala no válidos." si: `name` no es texto o, recor
+         +tado, no tiene 1–60 caracteres; `capacity` no es un entero entr
+         +e 1 y 100 (un `"4"` o un `4.5` no valen); `location` no es text
+         +o ni `null`, o recortado supera 60 caracteres. `name` y `locati
+         +on` se guardan recortados y una `location` vacía se guarda `nul
+         +l`. En `POST` son obligatorios `name` y `capacity`. En `PATCH` 
+         +debe llegar al menos un campo, `isActive` debe ser booleano y u
+         +n campo desconocido da 400. Spec §7 actualizado | Lo pidió el r
+         +esponsable: que las validaciones eviten datos absurdos. Los lím
+         +ites coinciden con los `CHECK` de la BD (§6.1), así que la API 
+         +rechaza antes con un mensaje claro lo que la BD rechazaría con 
+         +un 500 |                                                       
+      62 +| D-49 | 2026-11-15 | T5 | ¿"Sala 1" y "sala 1" son la misma sa
+         +la? (el `UNIQUE` del §6.1 distingue mayúsculas) | Sí, son la mi
+         +sma. Se garantiza en la BD con una migración nueva, `002_rooms_
+         +name_ci.sql`, que añade `CREATE UNIQUE INDEX rooms_name_lower_k
+         +ey ON rooms (lower(name))`. El §6.1 no se toca (sigue literal).
+         + La API traduce `23505` sobre `rooms_name_key` o `rooms_name_lo
+         +wer_key` a 409 `ROOM_NAME_TAKEN` "Ya existe una sala con ese no
+         +mbre.". Spec §5.2, §6.1 y §7 actualizados | Lo pidió el respons
+         +able: para RRHH son la misma sala. Va en la BD por el mismo mot
+         +ivo que D-05: un "SELECT para ver si el nombre existe" tiene co
+         +ndición de carrera, y el índice único es atómico. Como el nombr
+         +e se guarda recortado (D-48), los espacios sobrantes tampoco cr
+         +ean duplicados |                                               
+      63 +| D-50 | 2026-11-15 | T5 | Orden de errores en `POST/PATCH /api
+         +/rooms` | Primero lo general y después lo concreto, como en res
+         +ervas: 401 (sin sesión) → 403 (no es admin) → 404 (`:id` no num
+         +érico, solo en `PATCH`) → 400 (cuerpo no válido, D-48) → 404 (l
+         +a sala no existe, en el `SELECT ... FOR UPDATE`) → 409 `ROOM_NA
+         +ME_TAKEN` (lo decide la BD) | Lo pidió el responsable: el mismo
+         + criterio que en reservas (D-38, D-39). Validar el cuerpo antes
+         + de abrir la transacción evita bloquear la fila por una petició
+         +n mal formada |                                                
+      64 +| D-51 | 2026-11-15 | T5 | ¿Cómo se editan las salas en `/admin
+         +/salas`? | Con el mismo formulario de crear (`room-form`). El b
+         +otón "Editar" de cada fila carga la sala en el formulario, que 
+         +cambia el título a "Editar sala" y muestra "Guardar" y "Cancela
+         +r edición". No hace falta ningún `data-testid` nuevo | Lo pidió
+         + el responsable: reutilizar el formulario es lo más simple. Un 
+         +solo formulario, con las mismas validaciones y los mismos mensa
+         +jes |                                                          
+      65 +| D-52 | 2026-11-15 | T5 | Texto al desactivar una sala | Antes
+         + de desactivar se confirma con `window.confirm`: "¿Desactivar «
+         +<nombre>»? Se cancelarán sus reservas futuras.". Después se mue
+         +stra "Sala desactivada. Reservas canceladas: N.", con el `cance
+         +lledBookings` que devuelve el `PATCH` | Lo pidió el responsable
+         +: avisar antes y dar el número después evita una consulta previ
+         +a solo para contar, y el número es exacto porque sale de la mis
+         +ma transacción que cancela |                                   
+      66 +| D-53 | 2026-11-15 | T5 | ¿Qué hace "Activar" en una sala inac
+         +tiva? | Solo cambia `is_active` a `true` (`PATCH {isActive:true
+         +}`, `cancelledBookings: 0`), sin confirmación. Las reservas can
+         +celadas al desactivarla no vuelven | Lo pidió el responsable: r
+         +eactivar es reversible y no hace daño. Devolver las reservas ca
+         +nceladas podría provocar choques con las creadas mientras tanto
+         +, y sus dueños ya las daban por perdidas |                     
+
+⏺ Ahora actualizo la spec: §5.2 (la migración 002), §6.1 (la nota de la 002) y
+  §7 (los mensajes) y §9.
+
+⏺ Bash(python3 - <<'EOF'
+      p='docs/01-spec.md'…)
+  ⎿  Updated docs/01-spec.md (+13 -7)
+      54  | R10 | Solo se cancelan reservas activas cuyo inicio aún no ha
+           llegado | API | 409 `BOOKING_NOT_CANCELLABLE` |
+      55  | R11 | Cancelar no borra: cambia `status` a `cancelled` y libe
+          ra el horario (la restricción solo aplica a `active`) | BD + AP
+          I | — |
+      56  | R12 | Desactivar una sala cancela en la misma transacción sus
+           reservas activas futuras; no se borran salas. Nunca puede qued
+          ar una reserva activa futura en una sala inactiva, ni siquiera 
+          si alguien reserva mientras RRHH desactiva (bloqueo de fila, §8
+          .1) | API (transacción + bloqueo de fila) | — |
+      57 -| R13 | Nombre de sala único | UNIQUE en BD | 409 `ROOM_NAME_TA
+         -KEN` |                                                         
+      57 +| R13 | Nombre de sala único, sin distinguir mayúsculas (D-49) 
+         +| UNIQUE + índice único sobre `lower(name)` en BD | 409 `ROOM_N
+         +AME_TAKEN` |                                                   
+      58  
+      59  **Orden de validación al crear reserva:** 400 (formato) → 404/4
+          22 sala → 422 reglas R2–R6 → INSERT (la BD decide R1 → 409).
+      60  No se hace "SELECT para ver si está libre" antes del INSERT com
+          o garantía: la garantía es la restricción (D-05). Ese tipo de c
+          omprobación previa está **prohibida** porque introduce la falsa
+           sensación de control y una condición de carrera.
+     ...
+       96  api/
+       97    Dockerfile  .dockerignore
+       98    package.json  package-lock.json
+       99 -  migrations/001_init.sql                                     
+       99 +  migrations/001_init.sql  002_rooms_name_ci.sql              
+      100    src/
+      101      index.js               # arranque: migrar → seed → escucha
+           r
+      102      app.js                 # crea la app Express (exportada pa
+           ra tests)
+     ...
+      203  CREATE INDEX bookings_user_idx ON bookings (user_id, starts_at
+           );
+      204  ```
+      205  
+      206 -La API traduce el error de PostgreSQL con `code = '23P01'` (ex
+          -clusion_violation) y `constraint = 'bookings_no_overlap'` a **
+          -409 `BOOKING_CONFLICT`**, y `23505` sobre `rooms_name_key` a *
+          -*409 `ROOM_NAME_TAKEN`**.                                     
+      206 +**`migrations/002_rooms_name_ci.sql`** (literal, D-49): el nom
+          +bre de sala es único sin distinguir mayúsculas ("Sala 1" y "sa
+          +la 1" son la misma). El `001` no se modifica.                 
+      207 +```sql                                                        
+      208 +CREATE UNIQUE INDEX rooms_name_lower_key ON rooms (lower(name)
+          +);                                                            
+      209 +```                                                           
+      210 +                                                              
+      211 +La API traduce el error de PostgreSQL con `code = '23P01'` (ex
+          +clusion_violation) y `constraint = 'bookings_no_overlap'` a **
+          +409 `BOOKING_CONFLICT`**, y `23505` sobre `rooms_name_key` o `
+          +rooms_name_lower_key` a **409 `ROOM_NAME_TAKEN`**.            
+      212  
+      213  ### 6.2 Seed (idempotente, en cada arranque)
+      214  
+     ...
+      245  
+      246  | Código | HTTP | Cuándo | Mensaje (`message`, D-35) |
+      247  |---|---|---|---|
+      243 -| `VALIDATION_ERROR` | 400 | Cuerpo/parámetros con formato inv
+          -álido o faltantes | Login sin correo/contraseña válidos: "Corr
+          -eo y contraseña son obligatorios." · JSON mal formado: "El cue
+          -rpo de la petición no es JSON válido." · Reservas (`POST` y `G
+          -ET ?date`, D-38): "Datos de la reserva no válidos." · Salas: s
+          -e fija en T5 |                                                
+      248 +| `VALIDATION_ERROR` | 400 | Cuerpo/parámetros con formato inv
+          +álido o faltantes | Login sin correo/contraseña válidos: "Corr
+          +eo y contraseña son obligatorios." · JSON mal formado: "El cue
+          +rpo de la petición no es JSON válido." · Reservas (`POST` y `G
+          +ET ?date`, D-38): "Datos de la reserva no válidos." · Salas (`
+          +POST`/`PATCH`, D-48): "Datos de la sala no válidos." |        
+      249  | `UNAUTHORIZED` | 401 | Sin token, token inválido o expirado 
+           | "Sesión no válida o expirada." |
+      250  | `INVALID_CREDENTIALS` | 401 | Login con correo o contraseña 
+           incorrectos (mismo mensaje en ambos casos) | "Correo o contras
+           eña incorrectos." |
+      251  | `FORBIDDEN` | 403 | Rol insuficiente o reserva ajena | "No t
+           ienes permiso para esta acción." |
+      252  | `NOT_FOUND` | 404 | Recurso inexistente | "Recurso no encont
+           rado." |
+      253  | `BOOKING_CONFLICT` | 409 | R1 | "La sala ya está reservada e
+           n ese horario." |
+      249 -| `ROOM_NAME_TAKEN` | 409 | R13 | Se fija en T5 |             
+     … 21 more lines (ctrl+o to expand)
+
+⏺ Las decisiones y la spec ya están escritas. Añado la migración al alcance de
+  T5 en el backlog y empiezo el código de la API.
+
+⏺ Bash(python3 - <<'EOF'
+      p='docs/02-backlog.md'…)
+  ⎿  Created api/migrations/002_rooms_name_ci.sql (+1 -0)
+      1 +CREATE UNIQUE INDEX rooms_name_lower_key ON rooms (lower(name));
+  ⎿  Updated docs/02-backlog.md (+1 -0)
+      129  - **Dependencias:** T4.
+      130  - **Spec:** §2, §4 R7, R9, R12 y R13, §7.2 filas `rooms`, **§8
+           .1 (completo)**, §9 `/admin/salas` y cancelación por admin en 
+           agenda, §9.1, §10.1 `admin.spec.js`.
+      131  - **Alcance:**
+      132 +  - `migrations/002_rooms_name_ci.sql` (nombre de sala único s
+          +in distinguir mayúsculas, D-49).                              
+      133    - `POST /api/rooms`, `PATCH /api/rooms/:id` (transacción con
+            `SELECT ... FOR UPDATE` de la sala; desactivar cancela las fu
+           turas), `includeInactive` para admin.
+      134    - Modificar `POST /api/bookings` para bloquear la sala con `
+           SELECT ... FOR SHARE` dentro de su transacción, antes del INSE
+           RT (§8.1).
+      135    - `test/rooms.test.js`: roles (employee → 403), nombre dupli
+           cado (409), desactivar cancela reservas futuras y devuelve `ca
+           ncelledBookings`.
+
+⏺ Ahora las rutas de salas:
+
+⏺ Write(api/src/routes/rooms.js)
+  ⎿  Added 112 lines, removed 3 lines
+       1  const express = require('express');
+       2  const { pool } = require('../db');
+       3 -const { requireAuth } = require('../auth');                    
+       3 +const { requireAuth, requireAdmin } = require('../auth');      
+       4 +const { AppError } = require('../errors');                     
+       5  
+       5 -// T3: solo GET /api/rooms. El CRUD de administración es T5.   
+       6  const router = express.Router();
+       7 +router.use(requireAuth);                                       
+       8  
+       9 +const MAX_INT = 2147483647;                                    
+      10 +const MSG_VALIDATION = 'Datos de la sala no válidos.';         
+      11 +const PATCH_FIELDS = ['name', 'capacity', 'location', 'isActive
+         +'];                                                            
+      12 +                                                               
+      13 +function validationError() {                                   
+      14 +  return new AppError(400, 'VALIDATION_ERROR', MSG_VALIDATION);
+      15 +}                                                              
+      16 +                                                               
+      17 +function notFound() {                                          
+      18 +  return new AppError(404, 'NOT_FOUND', 'Recurso no encontrado.
+         +');                                                            
+      19 +}                                                              
+      20 +                                                               
+      21  // Representación Room del spec §7.1.
+      22  function toRoom(row) {
+      23    return {
+     ...
+      29    };
+      30  }
+      31  
+      19 -router.get('/', requireAuth, async (req, res) => {             
+      32 +// Validación de campos (D-48). Devuelve el valor limpio o lanz
+         +a 400.                                                         
+      33 +function cleanName(value) {                                    
+      34 +  if (typeof value !== 'string') throw validationError();      
+      35 +  const name = value.trim();                                   
+      36 +  if (name.length < 1 || name.length > 60) throw validationErro
+         +r();                                                           
+      37 +  return name;                                                 
+      38 +}                                                              
+      39 +                                                               
+      40 +function cleanCapacity(value) {                                
+      41 +  if (!Number.isInteger(value) || value < 1 || value > 100) thr
+         +ow validationError();                                          
+      42 +  return value;                                                
+      43 +}                                                              
+      44 +                                                               
+      45 +function cleanLocation(value) {                                
+      46 +  if (value === null) return null;                             
+      47 +  if (typeof value !== 'string') throw validationError();      
+      48 +  const location = value.trim();                               
+      49 +  if (location.length > 60) throw validationError();           
+      50 +  return location === '' ? null : location;                    
+      51 +}                                                              
+      52 +                                                               
+      53 +router.get('/', async (req, res) => {                          
+      54    // includeInactive=true solo vale para admin; para employee s
+          e ignora.
+      55    const includeInactive = req.user.role === 'admin' && req.quer
+          y.includeInactive === 'true';
+      56    const { rows } = await pool.query(
+     ...
+       61    res.json(rows.map(toRoom));
+       62  });
+       63  
+       64 +// POST /api/rooms (admin). El nombre duplicado (R13, D-49) lo
+          + decide la BD: 23505 → 409 en errors.js.                      
+       65 +router.post('/', requireAdmin, async (req, res) => {          
+       66 +  const body = req.body || {};                                
+       67 +  const name = cleanName(body.name);                          
+       68 +  const capacity = cleanCapacity(body.capacity);              
+       69 +  const location = body.location === undefined ? null : cleanL
+          +ocation(body.location);                                       
+       70 +                                                              
+       71 +  const { rows } = await pool.query(                          
+       72 +    `INSERT INTO rooms (name, capacity, location) VALUES ($1, 
+          +$2, $3)                                                       
+       73 +      RETURNING id, name, capacity, location, is_active`,     
+       74 +    [name, capacity, location],                               
+       75 +  );                                                          
+       76 +  res.status(201).json(toRoom(rows[0]));                      
+       77 +});                                                           
+       78 +                                                              
+       79 +// PATCH /api/rooms/:id (admin). Orden (D-50): 404 id → 400 cu
+          +erpo → 404 sala → 409 nombre.                                 
+       80 +// Una transacción que bloquea la fila con FOR UPDATE (spec §8
+          +.1): si una reserva tiene la sala                             
+       81 +// bloqueada con FOR SHARE, esperamos a que termine y luego la
+          + vemos y la cancelamos (R12).                                 
+       82 +router.patch('/:id', requireAdmin, async (req, res) => {      
+       83 +  const id = /^\d+$/.test(req.params.id) ? Number(req.params.i
+          +d) : NaN;                                                     
+       84 +  if (!Number.isInteger(id) || id < 1 || id > MAX_INT) throw n
+          +otFound();                                                    
+       85 +                                                              
+       86 +  const body = req.body;                                      
+       87 +  if (!body || typeof body !== 'object' || Array.isArray(body)
+          +) throw validationError();                                    
+       88 +  const keys = Object.keys(body);                             
+       89 +  if (keys.length === 0 || keys.some((k) => !PATCH_FIELDS.incl
+          +udes(k))) throw validationError();                            
+       90 +                                                              
+       91 +  const sets = [];                                            
+       92 +  const values = [];                                          
+       93 +  const add = (column, value) => {                            
+       94 +    values.push(value);                                       
+       95 +    sets.push(`${column} = $${values.length + 1}`);           
+       96 +  };                                                          
+       97 +  if ('name' in body) add('name', cleanName(body.name));      
+       98 +  if ('capacity' in body) add('capacity', cleanCapacity(body.c
+          +apacity));                                                    
+       99 +  if ('location' in body) add('location', cleanLocation(body.l
+          +ocation));                                                    
+      100 +  if ('isActive' in body) {                                   
+      101 +    if (typeof body.isActive !== 'boolean') throw validationEr
+          +ror();                                                        
+      102 +    add('is_active', body.isActive);                          
+      103 +  }                                                           
+      104 +                                                              
+      105 +  const client = await pool.connect();                        
+      106 +  try {                                                       
+      107 +    await client.query('BEGIN');                              
+      108 +                                                              
+      109 +    const locked = await client.query('SELECT id FROM rooms WH
+          +ERE id = $1 FOR UPDATE', [id]);                               
+      110 +    if (locked.rows.length === 0) throw notFound();           
+      111 +                                                              
+      112 +    const { rows } = await client.query(                      
+      113 +      `UPDATE rooms SET ${sets.join(', ')} WHERE id = $1      
+      114 +        RETURNING id, name, capacity, location, is_active`,   
+      115 +      [id, ...values],                                        
+      116 +    );                                                        
+      117 +                                                              
+      118 +    // R12: desactivar cancela en la misma transacción sus res
+          +ervas activas futuras.                                        
+      119 +    let cancelledBookings = 0;                                
+      120 +    if (body.isActive === false) {                            
+      121 +      const cancelled = await client.query(                   
+      122 +        `UPDATE bookings SET status = 'cancelled', cancelled_a
+          +t = now(), cancelled_by = $2                                  
+      123 +          WHERE room_id = $1 AND status = 'active' AND starts_
+          +at > now()`,                                                  
+      124 +        [id, req.user.id],                                    
+      125 +      );                                                      
+      126 +      cancelledBookings = cancelled.rowCount;                 
+      127 +    }                                                         
+      128 +                                                              
+      129 +    await client.query('COMMIT');                             
+      130 +    res.json({ room: toRoom(rows[0]), cancelledBookings });   
+      131 +  } catch (err) {                                             
+      132 +    await client.query('ROLLBACK');                           
+      133 +    throw err;                                                
+      134 +  } finally {                                                 
+      135 +    client.release();                                         
+      136 +  }                                                           
+      137 +});                                                           
+      138 +                                                              
+      139  module.exports = router;
+      140  module.exports.toRoom = toRoom;
+
+⏺ Ahora FOR SHARE en reservas y la traducción del 23505:
+
+⏺ Update(api/src/routes/bookings.js)
+  ⎿  Added 6 lines, removed 2 lines
+      100    try {
+      101      await client.query('BEGIN');
+      102  
+      103 -    // R7: la sala existe y está activa. (El bloqueo FOR SHARE
+          - del §8.1 se añade en T5.)                                    
+      104 -    const room = await client.query('SELECT id, is_active FROM
+          - rooms WHERE id = $1', [roomId]);                             
+      103 +    // R7/R12 (spec §8.1): bloquea la fila de la sala con FOR 
+          +SHARE antes del INSERT. Si RRHH                               
+      104 +    // la está desactivando (FOR UPDATE), esperamos y leemos i
+          +s_active ya confirmado → 422.                                 
+      105 +    // Protege "sala activa", no el solapamiento: eso lo decid
+          +e la restricción en el INSERT.                                
+      106 +    const room = await client.query('SELECT id, is_active FROM
+          + rooms WHERE id = $1 FOR SHARE', [                            
+      107 +      roomId,                                                 
+      108 +    ]);                                                       
+      109      if (room.rows.length === 0) throw notFound();
+      110      if (!room.rows[0].is_active) {
+      111        throw new AppError(422, 'ROOM_INACTIVE', 'La sala no est
+           á disponible.');
+
+⏺ Update(api/src/errors.js)
+  ⎿  Added 6 lines
+      22        error: { code: 'BOOKING_CONFLICT', message: 'La sala ya e
+          stá reservada en ese horario.' },
+      23      });
+      24    }
+      25 +  // R13 (D-49): nombre de sala repetido, también sin distingui
+         +r mayúsculas. Lo decide la BD.                                 
+      26 +  if (err.code === '23505' && ['rooms_name_key', 'rooms_name_lo
+         +wer_key'].includes(err.constraint)) {                          
+      27 +    return res.status(409).json({                              
+      28 +      error: { code: 'ROOM_NAME_TAKEN', message: 'Ya existe una
+         + sala con ese nombre.' },                                      
+      29 +    });                                                        
+      30 +  }                                                            
+      31    if (err.type === 'entity.parse.failed') {
+      32      return res.status(400).json({
+      33        error: { code: 'VALIDATION_ERROR', message: 'El cuerpo de
+           la petición no es JSON válido.' },
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Ahora los tests. Amplío rooms.test.js:
+
+⏺ Bash(cat >> api/test/rooms.test.js <<'EOF'…)
+  ⎿  Updated api/test/rooms.test.js (+169 -2)
+      1 -// Spec §7.2: GET /api/rooms (el CRUD de administración es T5). 
+      1 +// Spec §7.2: GET, POST y PATCH /api/rooms (CRUD de administraci
+        +ón, T5).                                                        
+      2  const { test, before, after } = require('node:test');
+      3  const assert = require('node:assert');
+      4  const request = require('supertest');
+      5 -const { setupTestDb, loginAs } = require('./helpers');          
+      5 +const { setupTestDb, loginAs, dates } = require('./helpers');   
+      6  
+      7  let app;
+      8  let pool;
+     ...
+       58      await pool.query('UPDATE rooms SET is_active = true WHERE 
+           id = 3');
+       59    }
+       60  });
+       61 +                                                              
+       62 +// --- T5: POST / PATCH de salas (spec §7.2, R12, R13, D-48 a 
+          +D-53) ---                                                     
+       63 +                                                              
+       64 +const VALIDATION = { code: 'VALIDATION_ERROR', message: 'Datos
+          + de la sala no válidos.' };                                   
+       65 +const NAME_TAKEN = { code: 'ROOM_NAME_TAKEN', message: 'Ya exi
+          +ste una sala con ese nombre.' };                              
+       66 +                                                              
+       67 +function post(token, body) {                                  
+       68 +  return request(app).post('/api/rooms').set('Authorization', 
+          +`Bearer ${token}`).send(body);                                
+       69 +}                                                             
+       70 +function patch(token, id, body) {                             
+       71 +  return request(app).patch(`/api/rooms/${id}`).set('Authoriza
+          +tion', `Bearer ${token}`).send(body);                         
+       72 +}                                                             
+       73 +                                                              
+       74 +test('POST /api/rooms: sin token → 401 y employee → 403', asyn
+          +c () => {                                                     
+       75 +  const anon = await request(app).post('/api/rooms').send({ na
+          +me: 'X', capacity: 2 });                                      
+       76 +  assert.strictEqual(anon.status, 401);                       
+       77 +  const res = await post(luis, { name: 'Sala Luis', capacity: 
+          +4 });                                                         
+       78 +  assert.strictEqual(res.status, 403);                        
+       79 +  assert.strictEqual(res.body.error.code, 'FORBIDDEN');       
+       80 +  const { rows } = await pool.query("SELECT count(*)::int AS n
+          + FROM rooms WHERE name = 'Sala Luis'");                       
+       81 +  assert.strictEqual(rows[0].n, 0);                           
+       82 +});                                                           
+       83 +                                                              
+       84 +test('POST /api/rooms crea la sala recortando espacios (201, f
+          +orma Room)', async () => {                                    
+       85 +  const res = await post(admin, { name: '  Sala Nueva  ', capa
+          +city: 7, location: '  Piso 4 ' });                            
+       86 +  assert.strictEqual(res.status, 201);                        
+       87 +  assert.deepStrictEqual(res.body, {                          
+     … 140 more lines (ctrl+o to expand)
+⏺ Ahora room-lock.test.js con los 3 escenarios del §8.1:
+
+⏺ Write(api/test/room-lock.test.js)
+  ⎿  Wrote 163 lines to api/test/room-lock.test.js
+      1 // Spec §8.1 (R12, D-26): carrera "desactivar sala" vs "crear res
+        erva".
+      2 // Un cliente pg del test hace de "la otra operación a medias" y
+        sujeta el bloqueo de la fila.
+      3 // Para saber que la petición HTTP está esperando ese bloqueo se
+        consulta pg_stat_activity
+      4 // (wait_event_type = 'Lock', máx. 5 s), nunca esperas fijas.
+      5 const { test, before, after } = require('node:test');
+      6 const assert = require('node:assert');
+      7 const request = require('supertest');
+     … +156 lines (ctrl+o to expand)
+
+⏺ Reconstruyo la API y paso los tests:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Pasan 59 de 59. Compruebo que room-lock corrió de verdad y que los tests
+  detectan el bloqueo. Para eso hago un control rápido: quito temporalmente el
+  FOR SHARE y espero que falle.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Sin FOR SHARE, el escenario "desactivar primero" y los 3 de estrés fallan, así
+  que los tests sí detectan la carrera. Ahora paso a revisar la interfaz.
+  · summary
+
+⏺ Write(web/src/pages/AdminSalas.jsx)
+  ⎿  Wrote 181 lines to web/src/pages/AdminSalas.jsx
+       1 import { useCallback, useEffect, useState } from 'react';
+       2 import { api } from '../api.js';
+       3
+       4 const EMPTY = { name: '', capacity: '', location: '' };
+       5
+       6 // /admin/salas (spec §9). Un solo formulario para crear y edita
+         r (D-51).
+       7 // La API valida todo (D-48); aquí solo se muestra error.message
+         .
+       8 export default function AdminSalas() {
+     … +173 lines (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      import re…)
+  ⎿  Updated web/src/App.jsx (+12 -1)
+       5  import Login from './pages/Login.jsx';
+       6  import Agenda from './pages/Agenda.jsx';
+       7  import MisReservas from './pages/MisReservas.jsx';
+       8 +import AdminSalas from './pages/AdminSalas.jsx';               
+       9  
+       9 -// Rutas del spec §9. Todas salvo /login requieren sesión. /adm
+         -in/salas llega en T5.                                          
+      10 +// Rutas del spec §9. Todas salvo /login requieren sesión; /adm
+         +in/salas solo admin.                                           
+      11  function RequireAuth() {
+      12    const { user, loading } = useAuth();
+      13    if (loading) return <p className="loading">Cargando…</p>;
+     ...
+      22    );
+      23  }
+      24  
+      25 +// Un employee que entra en /admin/salas acaba en /agenda (spec
+         + §9).                                                          
+      26 +function RequireAdmin() {                                      
+      27 +  const { user } = useAuth();                                  
+      28 +  if (user.role !== 'admin') return <Navigate to="/agenda" repl
+         +ace />;                                                        
+      29 +  return <Outlet />;                                           
+      30 +}                                                              
+      31 +                                                               
+      32  function PublicOnly({ children }) {
+      33    const { user, loading } = useAuth();
+      34    if (loading) return <p className="loading">Cargando…</p>;
+     ...
+      47                <Route path="/" element={<Navigate to="/agenda" r
+          eplace />} />
+      48                <Route path="/agenda" element={<Agenda />} />
+      49                <Route path="/mis-reservas" element={<MisReservas
+           />} />
+      50 +              <Route element={<RequireAdmin />}>               
+      51 +                <Route path="/admin/salas" element={<AdminSalas
+         + />} />                                                        
+      52 +              </Route>                                         
+      53                <Route path="*" element={<Navigate to="/agenda" r
+          eplace />} />
+      54              </Route>
+      55            </Routes>
+  ⎿  Updated web/src/components/Header.jsx (+3 -0)
+      18        <nav className="nav">
+      19          <NavLink to="/agenda" data-testid="nav-agenda">Agenda</
+          NavLink>
+      20          <NavLink to="/mis-reservas" data-testid="nav-mis-reserv
+          as">Mis reservas</NavLink>
+      21 +        {user.role === 'admin' && (                            
+      22 +          <NavLink to="/admin/salas" data-testid="nav-salas">Sa
+         +las</NavLink>                                                  
+      23 +        )}                                                     
+      24        </nav>
+      25        <span className="user">
+      26          {user.name} · <span className="role">{ROLE_LABELS[user.
+          role] || user.role}</span>
+  ⎿  Updated web/src/pages/Agenda.jsx (+2 -2)
+      73      }
+      74    }
+      75    const columnOf = new Map(rooms.map((r, i) => [r.id, i + 2]));
+      76 -  // T4: solo reservas propias. La cancelación de reservas ajen
+         -as por el admin llega en T5.                                   
+      77 -  const canCancel = (b) => b.userId === user.id;               
+      76 +  // El dueño cancela las suyas; el admin, cualquiera (R9, spec
+         + §9).                                                          
+      77 +  const canCancel = (b) => b.userId === user.id || user.role ==
+         += 'admin';                                                     
+      78  
+      79    function openForm(room, time) {
+      80      setNewBooking({ roomId: String(room.id), date, startTime: t
+          ime, endTime: defaultEnd(time) });
+  ⎿  Updated web/src/styles.css (+14 -0)
+      118    background: #fff; padding: 0.8rem 1rem; border-radius: 8px; 
+           border: 1px solid var(--line);
+      119  }
+      120  .mine-item div { display: flex; flex-direction: column; gap: 0
+           .2rem; }
+      121 +                                                              
+      122 +/* Administración de salas */                                 
+      123 +.success { margin: 0 0 1rem; padding: 0.6rem 0.8rem; border-ra
+          +dius: 6px; background: #e3f9e5; color: #1f6b2a; }             
+      124 +.admin > .error { margin-bottom: 1rem; }                      
+      125 +.admin-layout { display: grid; grid-template-columns: minmax(1
+          +6rem, 20rem) 1fr; gap: 1.5rem; align-items: start; }          
+      126 +.admin-layout h2 { margin: 0; font-size: 1.1rem; }            
+      127 +.form-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+      128 +.rooms-table { width: 100%; border-collapse: collapse; backgro
+          +und: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0, 
+          +0, 0, 0.1); overflow: hidden; }                               
+      129 +.rooms-table th, .rooms-table td { padding: 0.6rem 0.8rem; tex
+          +t-align: left; border-bottom: 1px solid var(--line); }        
+      130 +.rooms-table th { font-size: 0.85rem; color: var(--muted); bac
+          +kground: #f8f9fb; }                                           
+      131 +.rooms-table tr:last-child td { border-bottom: none; }        
+      132 +.room-inactive td { color: var(--muted); }                    
+      133 +.row-actions { display: flex; gap: 0.5rem; justify-content: fl
+          +ex-end; }                                                     
+      134 +@media (max-width: 760px) { .admin-layout { grid-template-colu
+          +mns: 1fr; } }                                                 
+
+⏺ La UI está escrita. Antes del e2e veo un problema que la spec no resuelve, así
+  que lo compruebo primero:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ La web compila, pero Playwright corre los archivos en paralelo por defecto, y
+  como ambos specs usan a Luis y el beforeEach de empleado.spec.js cancela todas
+  sus reservas futuras, los tests podrían fallar de forma intermitente; voy a
+  revisarlo. · summary
+
+⏺ User answered Claude's questions:
+  ⎿  · Playwright ejecuta admin.spec.js y empleado.spec.js en paralelo, y los
+     dos usan a Luis: el beforeEach de uno puede cancelar la reserva del otro y
+     los tests fallarían de forma intermitente. ¿Cómo lo evitamos? → workers: 1
+     igual que en las pruebas de API porque es lo mas simple, no cambia el spec
+     y la suite es chica, asi que unos segundos mas no importan. IMPORTANTE
+     anotalo como decision.
+
+⏺ Primero anoto la decisión y después escribo el código:
+
+⏺ Bash(cat >> docs/00-decisiones.md <<'EOF'
+      | D-54 | 2026-11-15 | T5 | Playwright ejecuta los archivos e2e en paralelo
+      por defecto. `admin.spec.js` usa a Luis (§10.1,…)
+  ⎿  Updated docs/00-decisiones.md (+1 -0)
+      64  | D-51 | 2026-11-15 | T5 | ¿Cómo se editan las salas en `/admin
+          /salas`? | Con el mismo formulario de crear (`room-form`). El b
+          otón "Editar" de cada fila carga la sala en el formulario, que 
+          cambia el título a "Editar sala" y muestra "Guardar" y "Cancela
+          r edición". No hace falta ningún `data-testid` nuevo | Lo pidió
+           el responsable: reutilizar el formulario es lo más simple. Un 
+          solo formulario, con las mismas validaciones y los mismos mensa
+          jes |
+      65  | D-52 | 2026-11-15 | T5 | Texto al desactivar una sala | Antes
+           de desactivar se confirma con `window.confirm`: "¿Desactivar «
+          <nombre>»? Se cancelarán sus reservas futuras.". Después se mue
+          stra "Sala desactivada. Reservas canceladas: N.", con el `cance
+          lledBookings` que devuelve el `PATCH` | Lo pidió el responsable
+          : avisar antes y dar el número después evita una consulta previ
+          a solo para contar, y el número es exacto porque sale de la mis
+          ma transacción que cancela |
+      66  | D-53 | 2026-11-15 | T5 | ¿Qué hace "Activar" en una sala inac
+          tiva? | Solo cambia `is_active` a `true` (`PATCH {isActive:true
+          }`, `cancelledBookings: 0`), sin confirmación. Las reservas can
+          celadas al desactivarla no vuelven | Lo pidió el responsable: r
+          eactivar es reversible y no hace daño. Devolver las reservas ca
+          nceladas podría provocar choques con las creadas mientras tanto
+          , y sus dueños ya las daban por perdidas |
+      67 +| D-54 | 2026-11-15 | T5 | Playwright ejecuta los archivos e2e 
+         +en paralelo por defecto. `admin.spec.js` usa a Luis (§10.1, "un
+         +a reserva creada por Luis") y el `beforeEach` de `empleado.spec
+         +.js` cancela todas las reservas futuras de Luis (§10): si corre
+         +n a la vez, uno cancela la reserva del otro a mitad de test y f
+         +allan de forma intermitente | `workers: 1` en `e2e/playwright.c
+         +onfig.js`: los archivos e2e corren en serie, igual que los de A
+         +PI (D-34). Se mantienen la limpieza del §10 y Luis en `admin.sp
+         +ec.js` | Lo pidió el responsable: es lo más simple, no cambia e
+         +l spec y la suite es pequeña, así que unos segundos más no impo
+         +rtan |                                                         
+  ⎿  Updated e2e/playwright.config.js (+2 -0)
+       4    testDir: './tests',
+       5    outputDir: 'results/test-results',
+       6    reporter: 'line',
+       7 +  // En serie (D-54): empleado y admin usan a Luis y limpian su
+         +s reservas antes de cada test.                                 
+       8 +  workers: 1,                                                  
+       9    use: {
+      10      baseURL: process.env.BASE_URL || 'http://web',
+      11      screenshot: 'only-on-failure',
+
+⏺ Añado la línea al alcance de T5 en el backlog, para que una reconstrucción
+  también lo haga. Luego escribo admin.spec.js:
+
+⏺ Bash(python3 - <<'EOF'
+      p='docs/02-backlog.md'…)
+  ⎿  Updated docs/02-backlog.md (+1 -0)
+      136    - `test/room-lock.test.js`: los 3 escenarios del §8.1.
+      137    - Página `/admin/salas`, enlace `nav-salas` solo admin, redi
+           rección de employee, botón cancelar en reservas ajenas para ad
+           min.
+      138    - `e2e/tests/admin.spec.js` con capturas `results/admin-*.pn
+           g`.
+      139 +  - `workers: 1` en `e2e/playwright.config.js`: los archivos e
+          +2e corren en serie porque empleado y admin usan a Luis (D-54).
+      140    - Revisar que el README describe exactamente lo construido (
+           puertos, usuarios, comandos).
+      141  - **Fuera de alcance:** gestión de usuarios.
+      142  - **Criterios de aceptación:**
+
+⏺ Write(e2e/tests/admin.spec.js)
+  ⎿  Wrote 184 lines to e2e/tests/admin.spec.js
+       1 // Spec §10.1 admin.spec.js (T5): administración de salas y canc
+         elación por admin.
+       2 const { test, expect } = require('@playwright/test');
+       3
+       4 const RRHH = { email: 'rrhh@empresa.local', password: 'Rrhh2026!
+         ' };
+       5 const LUIS = { email: 'luis@empresa.local', password: 'Empleado2
+         026!' };
+       6
+       7 async function apiToken(request, user) {
+     … +177 lines (ctrl+o to expand)
+
+⏺ Antes de ejecutar, compruebo que ningún otro elemento de la página tenga
+  role="status" o role="alert":
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+⏺ Ningún otro elemento choca. Paso a verificar la interfaz con la skill del
+  repo:
+
+⏺ Skill(verificar-ui)
+  ⎿  Successfully loaded skill
+
+⏺ Mis selectores siguen la skill salvo en el botón "Editar", que no tiene
+  data-testid; lo busco por su texto dentro de room-row-{id} y lo anoto. Ejecuto
+  la suite ahora. · summary
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Falla un paso. Miro la captura del fallo:
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ La app hace lo correcto: la sala desactivada ya no sale. El fallo es del test:
+  en Sala 1 a las 10:00 está la reserva demo, así que esa celda no se dibuja.
+  Uso como referencia la celda de las 08:00:
+
+⏺ Update(e2e/tests/admin.spec.js)
+  ⎿  Added 2 lines, removed 1 line
+      106    // Ya no aparece en la agenda, y la reserva de Luis quedó ca
+           ncelada.
+      107    await page.getByTestId('nav-agenda').click();
+      108    await page.getByTestId('agenda-date').fill(next);
+      109 -  await expect(page.getByTestId('slot-1-10:00')).toBeVisible()
+          -;                                                             
+      109 +  // Referencia de que la rejilla ya cargó (a las 10:00 de Sal
+          +a 1 está la demo de Ana).                                     
+      110 +  await expect(page.getByTestId('slot-1-08:00')).toBeVisible()
+          +;                                                             
+      111    await expect(page.getByTestId(`slot-${room.id}-10:00`)).toHa
+           veCount(0);
+      112    await expect(page.getByTestId('agenda-grid')).not.toContainT
+           ext(name);
+      113    await expect(page.getByTestId(`booking-${booking.id}`)).toHa
+           veCount(0);
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 9 de 9 dos veces seguidas. Ahora miro las capturas de admin:
+
+  Read 3 files (ctrl+o to expand)
+⏺ En la tabla, la línea entre filas se corta en la columna de botones porque el
+  display: flex sobre el <td> rompe su comportamiento de celda. Voy a envolver
+  los botones en un div y seguir revisando las demás capturas. · summary
+
+⏺ Bash(python3 - <<'EOF'
+      p='web/src/pages/AdminSalas.jsx'…)
+  ⎿  Updated web/src/pages/AdminSalas.jsx (+3 -1)
+      157                        {room.isActive ? 'Activa' : 'Inactiva'}
+      158                      </span>
+      159                    </td>
+      160 -                  <td className="row-actions">                
+      160 +                  <td>                                        
+      161 +                    <div className="row-actions">             
+      162                      <button type="button" className="btn btn-l
+           ight" onClick={() => startEdit(room)}>
+      163                        Editar
+      164                      </button>
+     ...
+      170                      >
+      171                        {room.isActive ? 'Desactivar' : 'Activar
+           '}
+      172                      </button>
+      173 +                    </div>                                    
+      174                    </td>
+      175                  </tr>
+      176                ))}
+
+  Read 2 files (ctrl+o to expand)
+
+⏺ La captura admin-7 muestra bien lo esencial: RRHH ve "Cancelar" en una reserva
+  de Luis. Ahora miro si la cabecera a media página es solo un artefacto de
+  fullPage con el modal fijo o un fallo real. · summary
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+⏺ Es el mismo efecto de la captura de página completa ya anotado en T4: la
+  cabecera fija estaba desplazada, aunque en el navegador se ve bien. Ahora
+  reconstruyo la web con el arreglo de la tabla y repito las capturas que
+  faltan. · summary
+
+  Read 4 files, ran 1 shell command (ctrl+o to expand)
+
+⏺ Las capturas confirman los cuatro cambios; la celda azul y la cabecera a media
+  página son efectos ya conocidos del hover. Ahora paso a la DoD: down -v, up
+  --build, npm test tres veces y la suite e2e completa. · summary
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 59 de 59 tres veces seguidas, con las dos migraciones aplicadas. Ahora el e2e
+  desde cero y unas comprobaciones manuales con curl:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Todo coincide con la spec; antes de la prueba de clon limpio haré la revisión
+  del README contra la app real, justo después del commit de T5. Ahora ejecuto
+  "Cómo levantar" tal cual, con docker compose up sin -d. · summary
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Esos 400 son un fallo de mi comando, no de la app: zsh no separa $t en
+  palabras y las horas llegaban vacías. Repito con valores explícitos:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Los cuatro usuarios, el puerto y el choque de reservas funcionan bien según el
+  README, y npm test deja la demo intacta. Algunas frases del README no cuadran
+  con la app, así que ahora reviso la carpeta de reconstrucción. · summary
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Encontré siete diferencias entre el README y la app real, y en todos los casos
+  es la app la que tiene razón, así que voy a corregir el README. La más
+  importante es que la celda de las 10:00 de Sala 1 está tapada por el bloque de
+  la demo, de modo que hay que elegir una celda libre y cambiar el horario en
+  el formulario. · summary
+
+⏺ Bash(python3 - <<'EOF'
+      p='README.md'…)
+  ⎿  Updated README.md (+18 -6)
+      16  
+      17  ## Requisitos
+      18  
+      19 -- Docker Desktop (o Docker Engine) con Docker Compose v2.      
+      19 +- Docker Desktop (o Docker Engine) con Docker Compose v2 o supe
+         +rior (el comando `docker compose`, no `docker-compose`).       
+      20  - Puerto **8080** libre.
+      21 -- Conexión a internet la primera vez (descarga de imágenes; la 
+         -de Playwright pesa ~2 GB y solo se usa para las pruebas de inte
+         -rfaz).                                                         
+      21 +- Conexión a internet la primera vez (descarga de imágenes; la 
+         +de Playwright ocupa unos 3,7 GB en disco y solo se usa para las
+         + pruebas de interfaz).                                         
+      22  
+      23  ## Cómo levantar
+      24  
+     ...
+      43  
+      44  El seed deja una reserva de **Ana** en **Sala 1, el próximo día
+           hábil, de 10:00 a 11:00**.
+      45  1. Entra como `luis@empresa.local`.
+      46 -2. En la agenda elige el próximo día hábil e intenta reservar S
+         -ala 1 de 10:00 a 11:00 (o 10:30 a 11:30).                      
+      47 -3. Verás: *"Esa sala ya está reservada en ese horario. Elige ot
+         -ro."* De 11:00 a 12:00 sí se puede.                            
+      46 +2. En la agenda elige el próximo día hábil en el selector de fe
+         +cha (en fin de semana la agenda ya abre en ese día). Verás el b
+         +loque de Ana en Sala 1 de 10:00 a 11:00.                       
+      47 +3. Haz clic en una celda libre de Sala 1 (por ejemplo, 09:00). 
+         +En el formulario elige inicio 10:00 y fin 11:00 (o 10:30 y 11:3
+         +0), escribe un título y pulsa reservar.                        
+      48 +4. Verás: *"Esa sala ya está reservada en ese horario. Elige ot
+         +ro."* Si cambias a 11:00–12:00, la reserva sí se crea.         
+      49 +                                                               
+      50 +### Administrar salas (RRHH)                                   
+      51 +                                                               
+      52 +Entra como `rrhh@empresa.local`: en la cabecera aparece **Salas
+         +** (`/admin/salas`).                                           
+      53 +- Crear y editar salas (nombre, capacidad de 1 a 100 y ubicació
+         +n). El nombre es único sin distinguir mayúsculas: "Sala 1" y "s
+         +ala 1" son la misma.                                           
+      54 +- **Desactivar** una sala pide confirmación, cancela sus reserv
+         +as futuras e indica cuántas canceló. La sala deja de aparecer e
+         +n la agenda. **Activar** la vuelve a mostrar, pero las reservas
+         + canceladas no vuelven.                                        
+      55 +- En la agenda, RRHH puede cancelar cualquier reserva; un emple
+         +ado, solo las suyas.                                           
+      56 +                                                               
+      57 +Un empleado no ve el enlace **Salas** y, si abre `/admin/salas`
+         +, vuelve a la agenda.                                          
+      58  
+      59  ## Cómo probar
+      60  
+     ...
+      68  docker compose --profile e2e run --rm --build e2e
+      69  ```
+      70  
+      61 -Los tests de API usan una base aparte (`reservas_test`) y no to
+         -can los datos de la demo. También prueban que una reserva hecha
+         - mientras RRHH desactiva una sala nunca queda activa en la sala
+         - inactiva (bloqueo de fila, `docs/01-spec.md` §8.1).           
+      71 +Los tests de API usan bases aparte (`reservas_test` y, para el 
+         +control negativo de concurrencia, `reservas_test_control`) y no
+         + tocan los datos de la demo. También prueban que una reserva he
+         +cha mientras RRHH desactiva una sala nunca queda activa en la s
+         +ala inactiva (bloqueo de fila, `docs/01-spec.md` §8.1).        
+      72 +                                                               
+      73 +Los tests de interfaz, en cambio, trabajan sobre la base de la 
+         +demo, igual que una persona usando la aplicación. Antes de cada
+         + test cancelan las reservas futuras de Luis, y dejan salas desa
+         +ctivadas con nombres `Sala E2E …` y `Sala Edit …` (se ven en `/
+         +admin/salas`). La reserva demo de Ana no se toca. Para volver a
+         + los datos iniciales: `docker compose down -v && docker compose
+         + up`.                                                          
+      74  
+      75  ## Documentación
+     … 7 more lines (ctrl+o to expand)
+
+⏺ Antes de dar el README por bueno, recorro los pasos nuevos tal como están
+  escritos, con un script de Playwright de un solo uso. Primero miro el texto
+  real del botón del formulario:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ El botón dice "Reservar". Ajusto ese detalle del README y escribo el recorrido
+  en el scratchpad, fuera del repo:
+
+⏺ Bash(sed -i '' 's/escribe un título y pulsa reservar\./escribe un título y
+      pulsa **Reservar**./' README.md && grep -n "Reservar\*\*" README.md
+      D=/private/tmp/claude-…)
+  ⎿  Updated README.md (+1 -1)
+      44  El seed deja una reserva de **Ana** en **Sala 1, el próximo día
+           hábil, de 10:00 a 11:00**.
+      45  1. Entra como `luis@empresa.local`.
+      46  2. En la agenda elige el próximo día hábil en el selector de fe
+          cha (en fin de semana la agenda ya abre en ese día). Verás el b
+          loque de Ana en Sala 1 de 10:00 a 11:00.
+      47 -3. Haz clic en una celda libre de Sala 1 (por ejemplo, 09:00). 
+         -En el formulario elige inicio 10:00 y fin 11:00 (o 10:30 y 11:3
+         -0), escribe un título y pulsa reservar.                        
+      47 +3. Haz clic en una celda libre de Sala 1 (por ejemplo, 09:00). 
+         +En el formulario elige inicio 10:00 y fin 11:00 (o 10:30 y 11:3
+         +0), escribe un título y pulsa **Reservar**.                    
+      48  4. Verás: *"Esa sala ya está reservada en ese horario. Elige ot
+          ro."* Si cambias a 11:00–12:00, la reserva sí se crea.
+      49  
+      50  ### Administrar salas (RRHH)
+  ⎿  (timeout 10m)
+
+⏺ Los dos recorridos del README ya están verificados con los textos visibles.
+  Ahora leo la plantilla del registro de la tarea. · summary
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(docs/tareas/T5-admin-salas.md)
+  ⎿  Wrote 135 lines to docs/tareas/T5-admin-salas.md
+       1 # T5 · Administración de salas (RRHH), bloqueo sala/reserva y ca
+         ncelación por admin
+       2
+       3 - **Sesión:** S5 · **Fecha:** 2026-11-15 · **Inicio–fin:** ~18:2
+         0–18:50
+       4 - **Agente:** Claude Code (Opus 5.5)
+       5 - **Sesión exportada:** `docs/sesiones/S5-t5-admin-salas.txt`
+       6
+       7 ## Qué se pidió
+       8 T5 de `02-backlog.md`:
+     … +127 lines (ctrl+o to expand)
+
+⏺ Bash(cat >> docs/03-bitacora.md <<'EOF'…)
+  ⎿  Updated docs/03-bitacora.md (+9 -0)
+      41  - **~18:02** · S4 · OK del responsable con cambios. La fecha de
+           hoy la da la API, para que la zona horaria viva en un solo lug
+          ar. Hay confirmación también en la agenda. El formulario se abr
+          e en un modal, porque debajo de 48 filas no se ve. La UI avisa 
+          y deshabilita las celdas si el día no se puede reservar. El age
+          nte propone el contrato `GET /api/calendar`, que el responsable
+           acepta añadiendo el aviso "Ya no quedan horas disponibles hoy.
+          ". Se escriben D-43 a D-47 y se actualizan spec y backlog antes
+           del código.
+      42  - **~18:10** · S4 · Código escrito: endpoint `GET /api/calendar
+          ` con sus tests, SPA con `react-router-dom@7.18.5` (login, agen
+          da con rejilla, modal, avisos, mis reservas) y `empleado.spec.j
+          s`. Primera ejecución: API 47/47 y e2e `5 passed`. Al revisar l
+          as capturas, la etiqueta "08:00" aparece cortada bajo la cabece
+          ra fija; se corrige el CSS y se vuelve a ejecutar y revisar.
+      43  - **18:16** · S4 · Verificación tras `down -v` + `up -d --build
+          `: servicios `healthy`, `npm test` 47/47, e2e `5 passed` dos ve
+          ces seguidas, 9 capturas revisadas, `curl` de `/api/calendar` c
+          orrecto. Registro en `docs/tareas/T4-interfaz-empleado.md` y co
+          mmit local de T4.
+      44 +                                                               
+      45 +## S5 · T5 Administración de salas, bloqueo sala/reserva y canc
+         +elación por admin (Claude Code, Opus 5.5)                      
+      46 +                                                               
+      47 +- **2026-11-15 ~18:20** · S5 · Al iniciar, el export de S4 se m
+         +ueve a `docs/sesiones/` y se commitea solo (`9c13578`). El agen
+         +te presenta el plan de T5 con 6 dudas: validación y mensaje de 
+         +salas, mayúsculas en el nombre, orden de errores, edición en la
+         + UI, textos al desactivar y reactivación. El responsable pide q
+         +ue la verificación final revise el README contra la app real.  
+      48 +- **~18:28** · S5 · OK del responsable. El nombre de sala no di
+         +stingue mayúsculas, así que el agente lo garantiza en la BD con
+         + una migración `002` (el `001` sigue literal) y no con una cons
+         +ulta previa. Se escriben D-48 a D-53 y spec §4, §5.2, §6.1, §7 
+         +y §9 antes del código.                                         
+      49 +- **~18:33** · S5 · API escrita: `POST`/`PATCH` de salas, `FOR 
+         +SHARE` en reservas, 409 `ROOM_NAME_TAKEN`, `rooms.test.js` ampl
+         +iado y `room-lock.test.js`. `npm test` da 59/59. Control: sin `
+         +FOR SHARE`, `room-lock` falla en 4 de 5 tests.                 
+      50 +- **~18:35** · S5 · Al escribir `admin.spec.js`, el agente dete
+         +cta que Playwright ejecutaría en paralelo dos archivos que limp
+         +ian las reservas de Luis. El responsable elige `workers: 1` y p
+         +ide anotarlo: D-54, escrita antes del cambio.                  
+      51 +- **~18:38** · S5 · e2e: un primer fallo de selector del propio
+         + test (la celda de las 10:00 de Sala 1 está tapada por la demo)
+         +. En las capturas, una línea de la tabla de salas aparece corta
+         +da; se corrige el CSS. Después, 9 passed varias veces seguidas.
+      52 +- **18:41** · S5 · Verificación tras `down -v` + `up -d --build
+         +`: servicios `healthy`, migraciones 001 y 002, `npm test` 59/59
+         + ×3, e2e 9 passed, contratos con `curl`. Revisión del README fr
+         +ase por frase contra la app: se corrigen los pasos de "Probar e
+         +l choque" (la celda de las 10:00 no se puede pulsar), el tamaño
+         + de la imagen de Playwright y la versión de Compose; se añaden 
+         +la sección de administración de salas, el aviso de que el e2e m
+         +odifica la demo y la base `reservas_test_control`. Los pasos nu
+         +evos se recorren con un script de Playwright que solo usa texto
+         +s visibles: 2 passed.                                          
+
+⏺ Commit de T5 y después la prueba de clon limpio sobre ese commit. Antes paro
+  el stack principal para liberar el puerto 8080:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ El clon limpio arranca sano: seed 4/5/1, migraciones 001 y 002, API 59/59 y
+  e2e 9 passed. Miro la captura del choque generada en el clon, como prueba de
+  que "la demo funciona":
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Desmonto el clon, vuelvo a levantar el stack principal y completo el registro
+  con la evidencia del clon:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(python3 - <<'EOF'
+      p='docs/tareas/T5-admin-salas.md'…)
+  ⎿  Updated docs/03-bitacora.md (+1 -0)
+      50  - **~18:35** · S5 · Al escribir `admin.spec.js`, el agente dete
+          cta que Playwright ejecutaría en paralelo dos archivos que limp
+          ian las reservas de Luis. El responsable elige `workers: 1` y p
+          ide anotarlo: D-54, escrita antes del cambio.
+      51  - **~18:38** · S5 · e2e: un primer fallo de selector del propio
+           test (la celda de las 10:00 de Sala 1 está tapada por la demo)
+          . En las capturas, una línea de la tabla de salas aparece corta
+          da; se corrige el CSS. Después, 9 passed varias veces seguidas.
+      52  - **18:41** · S5 · Verificación tras `down -v` + `up -d --build
+          `: servicios `healthy`, migraciones 001 y 002, `npm test` 59/59
+           ×3, e2e 9 passed, contratos con `curl`. Revisión del README fr
+          ase por frase contra la app: se corrigen los pasos de "Probar e
+          l choque" (la celda de las 10:00 no se puede pulsar), el tamaño
+           de la imagen de Playwright y la versión de Compose; se añaden 
+          la sección de administración de salas, el aviso de que el e2e m
+          odifica la demo y la base `reservas_test_control`. Los pasos nu
+          evos se recorren con un script de Playwright que solo usa texto
+          s visibles: 2 passed.
+      53 +- **18:43** · S5 · Prueba de clon limpio sobre el commit de T5:
+         + `git clone` a una carpeta temporal y `up -d --build` → `health
+         +y`, seed 4/5/1, migraciones 001 y 002, `npm test` 59/59, e2e 9 
+         +passed, captura del choque revisada. Clon desmontado y stack pr
+         +incipal levantado de nuevo. Se completa `docs/tareas/T5-admin-s
+         +alas.md` y se enmienda el commit local de T5 con esta evidencia
+         +.                                                              
+  ⎿  Updated docs/tareas/T5-admin-salas.md (+1 -1)
+      132  - [x] Sin regresiones
+      133  - [x] Bitácora actualizada
+      134  - [x] Decisiones registradas (D-48 a D-54, escritas antes del 
+           código)
+      135 -- [ ] Commit local: `T5: …`                                   
+      135 +- [x] Commit local: `T5: administración de salas (RRHH), bloqu
+          +eo FOR SHARE/FOR UPDATE sala-reserva y cancelación por admin` 
+⏺ El script de Python falló en el tercer reemplazo, así que el archivo de tarea
+  no se guardó, aunque la bitácora, la casilla del commit y el --amend sí
+  quedaron. Ahora lo corrijo y vuelvo a enmendar. · summary
+
+⏺ Bash(python3 - <<'EOF'
+      p='docs/tareas/T5-admin-salas.md'…)
+  ⎿  Updated docs/tareas/T5-admin-salas.md (+7 -3)
+      1  # T5 · Administración de salas (RRHH), bloqueo sala/reserva y ca
+         ncelación por admin
+      2  
+      3 -- **Sesión:** S5 · **Fecha:** 2026-11-15 · **Inicio–fin:** ~18:2
+        -0–18:50                                                         
+      3 +- **Sesión:** S5 · **Fecha:** 2026-11-15 · **Inicio–fin:** ~18:2
+        +0–18:44                                                         
+      4  - **Agente:** Claude Code (Opus 5.5)
+      5  - **Sesión exportada:** `docs/sesiones/S5-t5-admin-salas.txt`
+      6  
+     ...
+      73  | 2. `rooms.test.js` y sin regresiones (API + e2e) | `docker co
+          mpose exec api npm test` | ✅ 59/59 (47 anteriores + 7 de salas
+           + 5 de bloqueo) |
+      74  | 3. `room-lock.test.js`: desactivar primero → 422 sin reserva;
+           reservar primero → `cancelledBookings ≥ 1` y la reserva queda 
+          `cancelled`; estrés → 0 activas futuras en salas inactivas; `np
+          m test` ×3 | `npm test` tres veces seguidas tras `down -v` + `u
+          p --build` | ✅ 59/59 las tres veces |
+      75  | 3b. Control: los tests detectan la falta del bloqueo | Se qui
+          tó a mano `FOR SHARE` dentro del contenedor y se ejecutó `node 
+          --test test/room-lock.test.js` | ✅ Fallan "desactivar primero"
+           y los 3 de estrés. "Reservar primero" pasa, como se esperaba: 
+          el `FOR SHARE` lo toma el cliente del test. El contenedor se re
+          creó desde la imagen después |
+      76 -| 4. Clon limpio: `healthy` y la demo funciona | `git clone` al
+         - scratchpad + `docker compose up -d --build` | ver "Prueba de c
+         -lon limpio" |                                                  
+      76 +| 4. Clon limpio: `healthy` y la demo funciona | `git clone` de
+         +l commit de T5 al scratchpad + `docker compose up -d --build` |
+         + ✅ ver "Prueba de clon limpio" |                              
+      77  | DoD: `down -v` + `up --build` sano | `docker compose ps` | ✅
+           db, api y web `healthy`; `schema_migrations` = `001_init.sql`,
+           `002_rooms_name_ci.sql`; `\d rooms` muestra `rooms_name_lower_
+          key` |
+      78  | Contratos a mano | `curl` por nginx | ✅ "sala 1" → 409 `ROOM
+          _NAME_TAKEN`; capacidad 0 → 400 "Datos de la sala no válidos.";
+           Luis `POST /rooms` → 403; `PATCH /rooms/999` → 404 |
+      79  
+     ...
+      117  El script del recorrido del README se ejecutó desde el scratch
+           pad, montado en el contenedor `e2e`, y no forma parte del repo
+           . Resultado: `2 passed`.
+      118  
+      119  ## Prueba de clon limpio
+      120 -_(se completa tras el commit; ver abajo)_                     
+      120 +Sobre el commit de T5 (`git clone` del repositorio local a una
+          + carpeta temporal, sin `.env` ni pasos manuales). Antes se par
+          +ó el stack principal para liberar el puerto 8080.             
+      121 +- `docker compose up -d --build` → `clon-limpio-db/api/web` `h
+          +ealthy`; `/api/health` → `{"status":"ok","db":"ok"}`.         
+      122 +- Seed: 4 usuarios, 5 salas y 1 reserva; migraciones `001_init
+          +.sql` y `002_rooms_name_ci.sql`.                              
+      123 +- `npm test` → 59/59. e2e → `9 passed`, 17 capturas. En `emple
+          +ado-2-choque.png` del clon se ve el mensaje de choque sobre la
+          + demo de Ana.                                                 
+      124 +- Después: `down -v --rmi local` del clon, carpeta borrada y s
+          +tack principal levantado de nuevo (`healthy`).                
+      125  
+      126  ## Problemas y correcciones
+      127  - **Fallo del e2e en la primera ejecución:** `admin.spec` espe
+           raba `slot-1-10:00` como referencia de "agenda cargada", pero 
+           en esa celda está la demo de Ana y no se dibuja. La captura de
+            fallo confirmó que la app iba bien (la sala ya no salía). Se 
+           usó `slot-1-08:00`.
+
+⏺ T5 está cerrada con un commit local, 8cb4b1b T5: …, sin push. La verificación
+  pasa entera: la API 59 de 59 tres veces seguidas tras down -v, y la interfaz 9
+  de 9 en varias ejecuciones. En la revisión del README salieron 7 cosas que no
+  coincidían con la app. En todos los casos la app hacía lo correcto y lo que
+  corregí fue el README.
+
+  Qué se construyó
+  - API: RRHH puede crear y editar salas. Al desactivar una, en la misma
+    operación se cancelan sus reservas futuras y se devuelve cuántas.
+  - Bloqueo entre "reservar" y "desactivar": las dos operaciones bloquean la
+    fila de la sala, como pide el §8.1 de la spec. El anti-choque sigue viviendo
+    solo en la restricción de PostgreSQL.
+  - Nombres sin distinguir mayúsculas: "Sala 1" y "sala 1" cuentan como la
+    misma. Lo garantiza la base de datos con una migración nueva,
+    002_rooms_name_ci.sql, que añade un índice único. La 001 sigue literal. Lo
+    hice así porque comprobar el nombre antes de guardar tendría la misma
+    carrera que la spec prohíbe para las reservas.
+  - Web: pantalla /admin/salas con un solo formulario para crear y editar. El
+    enlace "Salas" solo lo ve RRHH, y un empleado que abre la página vuelve a la
+    agenda. RRHH puede cancelar cualquier reserva desde la agenda.
+  - Decisiones D-48 a D-54: quedaron escritas antes del código, incluida la de
+    ejecutar los tests de interfaz en serie (workers: 1) que pediste anotar.
+
+  Verificación
+  - Prueba del bloqueo: quité a mano el bloqueo de la reserva y 4 de los 5 tests
+    de room-lock.test.js fallaron. O sea, los tests sí detectan la carrera.
+  - Clon limpio: con git clone a una carpeta temporal y docker compose up -d
+    --build, todo queda sano y pasan la API (59 de 59) y la interfaz (9 de 9).
+    Lo hice sobre el commit antes de enmendarlo; la enmienda solo añadió la nota
+    de la tarea y la bitácora.
+  - Capturas: las revisé todas. Arreglé una línea cortada en la tabla de salas.
+    La cabecera de la agenda que sale a media página en las capturas con modal
+    es el mismo efecto de captura ya anotado en T4; en el navegador se ve bien.
+
+  Revisión del README contra la app real
+
+  Ejecuté cada afirmación: docker compose up sin -d, el login de los 4 usuarios,
+  los comandos de prueba y que los tests de API no tocan la demo. Además
+  recorrí con Playwright los pasos tal como están escritos, usando solo textos
+  visibles. Esto es lo que no coincidía:
+  1. "Probar el choque" no se podía seguir: la celda de las 10:00 de Sala 1 está
+     tapada por la reserva de Ana. Ahora dice que hay que pulsar una celda
+     libre y cambiar la hora en el formulario.
+  2. Imagen de Playwright: decía "~2 GB" y en disco ocupa 3,7 GB.
+  3. Docker Compose: decía "v2" y ahora dice "v2 o superior" (aquí funciona con
+     v5.3.1).
+  4. Faltaba explicar la administración de salas: añadí una sección.
+  5. Faltaba avisar de que los tests de interfaz modifican la demo: cancelan las
+     reservas futuras de Luis y dejan salas de prueba inactivas.
+  6. Faltaba la segunda base de tests, reservas_test_control.
+  7. docs/reconstruccion/ no está vacía: tiene su README.md.
+
+  El detalle está en T5-admin-salas.md (docs/tareas/T5-admin-salas.md).
+
+  Un detalle de test: el botón "Editar" de la tabla de salas no tiene
+  data-testid en la spec, así que el test lo busca por su texto dentro de la
+  fila.
+
+  Te toca exportar la sesión: /export → docs/sesiones/S5-t5-admin-salas.txt. La
+  próxima sesión la commitearé al empezar.
